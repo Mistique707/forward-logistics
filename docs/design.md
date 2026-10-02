@@ -7,7 +7,8 @@ class, can we still reach it in time, and what should we send, by which route an
 
 The demo story is **Advance Winter Stocking**. Posts beyond Zojila Pass must be stocked before
 the pass closes for winter. The headline alert reads: *"Post Alpha runs out of kerosene in 9
-days; Zojila closes in 6; dispatch 2 trucks by Tue 11 Nov."*
+days; Zojila closes in 6; dispatch N trucks by <day>."* The truck count and the day come from
+the plan.
 
 All data is synthetic. The terrain, roads, passes and weather are real open data for Ladakh.
 Post and depot names are fictional, and post coordinates are generic high-altitude terrain
@@ -63,8 +64,9 @@ file, ships in Python's standard library, and works offline.
 
 ## 2. Open data (fetched once, cached in the repo)
 
-`backend/fetch_data.py` downloads the data into `data/raw/`. The files are committed so the
-demo runs offline.
+`python -m backend.fetch_data` downloads the data and builds `data/network.json`. The results
+(`weather.csv`, `network.json`, plus a 2 MB gzipped OSM extract) are committed so the demo
+runs offline.
 
 - **Roads and passes:** an Overpass query for `highway=trunk|primary|secondary|tertiary` and
   `mountain_pass=yes` in a Ladakh/Kashmir bounding box. The query keeps only the ways the route
@@ -92,16 +94,30 @@ node and a fixed seed (`SEED=26251`).
   - diesel: 0.25 L + 0.012 L × HDD
   - ammunition: 0.04 kg × tempo² (tempo 1/2/3), plus rare firing-incident spikes
   - medical: 0.015 kg × (1 + 0.2·(alt−3000)/1000 + 0.01·max(0, −t_min))
-- **Pass status:** Zojila closes on the first day after 1 Nov when 3-day snowfall exceeds S cm
-  (and by 31 Dec at the latest). It reopens on the first day after 15 Mar when the 14-day mean
-  temperature exceeds 0 °C. Khardung La and Chang La close for 1–3 days when daily snowfall
-  exceeds 15 cm.
-- **Stock:** each post consumes daily and is resupplied by a reorder-point convoy when its
-  route is open. In winter it falls back to a helicopter. Stock goes into `daily` and the
-  latest snapshot goes into `stock_reports`.
-- **Demo date:** chosen as 6 days before the simulated 2025 Zojila closure (mid-Nov 2025). The
-  demo scenario injects one event: Post Alpha's last winter-stocking convoy was turned back by
-  a landslide, so its kerosene is about 9 days from running out. Everything is deterministic.
+- **Pass status:** Zojila closes on the first day after 1 Nov when the 3-day snowfall is
+  **S = 15 cm** or more, and on 31 Dec at the latest. It reopens on the first day after 15 Mar
+  when the 14-day mean temperature exceeds 0 °C. The value of S was pinned against the real
+  ERA5 snowfall at the pass. It gives closures of 14 Nov 2020, 6 Nov 2022, 28 Dec 2024 and
+  21 Dec 2025; in 2021 and 2023 nothing triggered, so the pass closed on 31 Dec. Reopenings
+  fall between late April and May. Khardung La and Chang La close on any day with 10 cm or
+  more of snow, plus the next day, or the next 2 days if snowfall reaches 20 cm.
+- **Stock** follows three resupply regimes:
+  - Open season: a reorder-point convoy goes out when stock plus pipeline falls below
+    20 days, and fills to 45 days after a 3-day lead time.
+  - **Advance Winter Stocking (1 Jun – 31 Oct):** weekly convoys build each post linearly
+    toward its winter target. The target is the expected use from 1 Nov to the
+    climatological reopening, plus 10%, at planning-norm tempo 2. By the closure, most posts
+    sit near target.
+  - Winter (road closed): helicopter air maintenance when stock falls below 15 days.
+  Daily stock goes into `daily`, and the latest snapshot goes into `stock_reports`.
+- **Demo date: 15 Dec 2025**, 6 days before the simulated Zojila closure on 21 Dec. Two
+  shortfalls are injected:
+  - A landslide cut the Drass–Alpha track on 1 Oct, so Post Alpha missed its October
+    convoys. The track is reported clear on 14 Dec. Alpha's season kerosene receipts are
+    scaled so that it holds about 9 days of kerosene, and its other classes hold about 110–130
+    days against the roughly 140 days needed.
+  - Foxtrot received only 60% of its winter-stocking diesel.
+  Everything else is near target. Everything is deterministic.
 
 ---
 
@@ -119,9 +135,12 @@ node and a fixed seed (`SEED=26251`).
   current stock. The result is a runout date for each post and class.
 - **Validation:** a time-based holdout (Oct 2024–Sep 2025, which includes a full winter). The
   report gives MAE and MAPE per class against a **naive baseline**: the trailing 7-day mean,
-  lagged by the forecast horizon (1–14 days). The holdout uses archived weather as the
-  forecast. The doc and UI say plainly that this is optimistic compared with real forecast
-  error.
+  lagged by the forecast horizon (1–14 days). Troops and tempo are frozen at the forecast
+  origin. The metrics are reported **twice**:
+  - with the archived weather as the "forecast" (an upper bound, because it is a perfect
+    forecast)
+  - with **climatology-only** future weather (a lower bound, with no weather forecast at all)
+  The model has to beat the baseline in both.
 - **Explainability:** global gain-based feature importance per class. For each post, LightGBM's
   built-in SHAP contributions (`pred_contrib=True`) explain why the forecast is what it is.
   No extra dependency is needed.
@@ -159,8 +178,14 @@ of road.
 
 - **Demand:** for each post and class, shortfall = target stock − current stock. The target
   covers stock until the next guaranteed road access, which for posts beyond Zojila means
-  until spring reopening, plus a 7-day safety buffer. Shortfalls are split into chunks of
-  ≤ 500 kg.
+  until spring reopening, plus a 7-day safety buffer. Shortfalls fall into two kinds:
+  - *Urgent:* runout falls inside the 14-day window. These go in 500 kg chunks, with truck,
+    helicopter and airdrop options.
+  - *Stocking:* runout falls later. These go in 2,000 kg chunks with the truck option only.
+    Not sending one costs its later air-maintenance price, so the solver weighs a truck now
+    against air later, and anything it defers shows up as a "winter air-maintenance
+    liability".
+  Chunk sizes double until the model has **≤ 300 nodes**.
 - **Mode choice as disjunctions:** each chunk becomes one node per feasible mode (truck,
   helicopter or airdrop). `AddDisjunction` with max cardinality 1 makes the solver deliver it
   by exactly one mode, or drop it at a large penalty. Dropped chunks surface as **UNMET**
@@ -176,8 +201,9 @@ of road.
   `CumulVar.RemoveInterval`. A track post's mule shuttle is added as service time.
 - **Capacity dimension** limits each vehicle to its payload.
 - **Search:** routes are open (no return leg). The first solution comes from
-  `PARALLEL_CHEAPEST_INSERTION`, improved by greedy descent. This is deterministic, which keeps
-  tests and the video reproducible.
+  `PARALLEL_CHEAPEST_INSERTION`, improved by greedy descent to a local optimum, with a **hard
+  5 s time limit**. The search is deterministic whenever it finishes inside the limit, which
+  keeps tests and the video reproducible.
 - **Output (dispatch plan):** one row per trip, giving mode, vehicle, origin, route (passes
   crossed), stops with quantity by class, latest dispatch time, arrival time and cost. Totals
   cover tonnage by mode, cost and unmet kg.
@@ -195,7 +221,8 @@ A scenario is a small set of overrides on the baseline inputs:
 - `tempo`: the tempo for a sector
 
 `compute_state(scenario)` re-runs forecast → runout → demand → VRP and returns the posts,
-alerts, plan and KPIs. The baseline is computed once at startup. The API returns the
+alerts, plan and KPIs. **The baseline and every preset are computed once at startup and
+cached**, so presets switch instantly. A custom scenario is one live solve, under 5 s. The API returns the
 **before/after diff**: KPI deltas, runout-date changes per post, and plan changes (mode shifts,
 added or removed trips, cost, unmet kg). Five presets ship with the app, including the
 winter-stocking demo path.
@@ -269,8 +296,10 @@ docs/design.md
 
 ## Explicit simplifications
 
-- All stock originates at SAPPHIRE. The ONYX airhead holds an air-maintenance reserve, and
-  replenishing the intermediate depots is out of scope.
+- All road stock originates at SAPPHIRE. **The ONYX air reserve is unlimited**: helicopter
+  sorties draw from it without depleting it. Replenishing the intermediate depots is out of
+  scope.
+- Multi-stop truck routes beyond a pass use a conservative arrival cap at every stop.
 - Each truck makes one convoy trip in the 14-day window. Return legs are ignored.
 - Weather limits are evaluated per day, not per hour.
 - The holdout and the demo both use archived weather as the "forecast".
