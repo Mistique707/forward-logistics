@@ -213,7 +213,8 @@ def _alerts(state):
                               f"{day_label(first // 24)}")
                 else:
                     action = f"airdrop from Sapphire, {day_label(min(t['depart_h'] for t in carry) // 24)}"
-                sev = "critical" if r is not None and r <= 3 else "high"
+                # the road window shutting before the runout is the winter-stocking danger
+                sev = "critical" if r is not None and (r <= 3 or (cd is not None and cd < r)) else "high"
             alerts.append({"severity": sev, "post": p, "cls": cls, "days": r,
                            "title": f"{post['name']} runs out of {lab} in {r} days",
                            "text": f"{post['name']} runs out of {lab} in {r} days; {pass_txt}; {action}."})
