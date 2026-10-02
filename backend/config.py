@@ -58,7 +58,7 @@ MODES = {
     "heli": {"label": "Helicopter", "payload_kg": 1500, "speed_kmh": 180, "fixed": 50000, "per_km": 1500,
              "airframes": 2, "sorties_per_day": 2, "base": "ONYX", "max_gust": 45, "max_snow_cm": 1,
              "max_cloud": 85, "range_km": 250},
-    "airdrop": {"label": "Airdrop", "payload_kg": 5000, "speed_kmh": 400, "fixed": 200000, "per_km": 1250,
+    "airdrop": {"label": "Airdrop", "payload_kg": 5000, "speed_kmh": 400, "fixed": 500000, "per_km": 2000,
                 "sorties_per_day": 1, "base": "SAPPHIRE", "max_gust": 35, "max_cloud": 70, "loss": 0.10},
 }
 
