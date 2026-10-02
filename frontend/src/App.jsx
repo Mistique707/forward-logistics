@@ -66,7 +66,7 @@ export default function App() {
   const selectPost = (id, c) => { setPost(id); if (c) setCls(c) }
 
   return (
-    <div className="app">
+    <div className={`app ${tab === 'whatif' ? 'tall' : ''}`}>
       <TopBar state={state} base={base} scenarioName={scenarioName} onReset={() => run({})} />
       <Alerts state={state} post={post} onSelect={selectPost} reports={reports} />
       <div className="map panel">

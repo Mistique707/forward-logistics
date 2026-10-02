@@ -74,8 +74,9 @@ runs offline.
 - **Weather:** the Open-Meteo archive, daily values for each node from Oct 2020 to Mar 2026.
 - **Elevation:** the Open-Meteo elevation API (Copernicus 90 m DEM, SRTM-class) for nodes and
   sampled route points.
-- **Map tiles:** Esri dark hillshade + CARTO dark labels, loaded live. These are the only part
-  that needs internet. Without tiles, the vector layers still render.
+- **Map tiles:** Esri dark hillshade, loaded live. This is the only part that needs internet;
+  without tiles, the vector layers still render. CARTO's label tiles now require an API key,
+  so the dashboard draws its own town labels instead.
 
 ---
 
@@ -90,7 +91,8 @@ node and a fixed seed (`SEED=26251`).
   sticky transitions.
 - **Consumption per day** = troops × per-capita rate × lognormal noise (σ≈0.12):
   - rations: 1.4 kg × (1 + 0.15·[alt>3000 m]) × (1 + 0.01·max(0, −t_mean))
-  - kerosene: 0.03 L × HDD × (1 + 0.1·(alt−3000)/1000), where HDD = max(0, 15 − t_mean)
+  - kerosene: 0.05 L for cooking + 0.03 L × HDD × (1 + 0.1·(alt−3000)/1000), where
+    HDD = max(0, 15 − t_mean). The cooking base keeps MAPE defined in summer.
   - diesel: 0.25 L + 0.012 L × HDD
   - ammunition: 0.04 kg × tempo² (tempo 1/2/3), plus rare firing-incident spikes
   - medical: 0.015 kg × (1 + 0.2·(alt−3000)/1000 + 0.01·max(0, −t_min))
@@ -200,10 +202,16 @@ of road.
   pass. Weather no-go days, and transient pass closures, are removed from arrival windows with
   `CumulVar.RemoveInterval`. A track post's mule shuttle is added as service time.
 - **Capacity dimension** limits each vehicle to its payload.
-- **Search:** routes are open (no return leg). The first solution comes from
-  `PARALLEL_CHEAPEST_INSERTION`, improved by greedy descent to a local optimum, with a **hard
-  5 s time limit**. The search is deterministic whenever it finishes inside the limit, which
-  keeps tests and the video reproducible.
+- **Search:** routes are open (no return leg).
+  - Each mode's fixed sortie cost sits on its first leg, so insertion heuristics see it.
+  - Two deterministic first-solution strategies, `PARALLEL_CHEAPEST_INSERTION` and
+    `ALL_UNPERFORMED`, are each improved by greedy descent, and the cheaper plan is kept.
+    Cheapest insertion alone can lock a chunk into the wrong mode.
+  - There is a **hard 5 s limit** in total. Each solve takes under 1 s in practice, so the
+    result is reproducible.
+- **Urgent loads** must land a day before their runout day.
+- **Latest dispatch** for each trip is the tightest stop window minus that stop's travel
+  offset.
 - **Output (dispatch plan):** one row per trip, giving mode, vehicle, origin, route (passes
   crossed), stops with quantity by class, latest dispatch time, arrival time and cost. Totals
   cover tonnage by mode, cost and unmet kg.
@@ -235,10 +243,11 @@ winter-stocking demo path.
 |---|---|---|
 | GET | `/api/network` | Nodes, passes and route GeoJSON with risk |
 | POST | `/api/state` | Body: a scenario (empty for the baseline). Returns posts, stock, runout, alerts, plan and KPIs, plus the diff against the baseline. |
-| GET | `/api/posts/{id}/series?scenario=` | History plus forecast per class, a stock depletion line and SHAP drivers |
+| POST | `/api/series` | Body: `{post_id, scenario}`. Returns history plus forecast per class, projected stock with and without the plan, and SHAP drivers. |
 | GET | `/api/model` | Validation metrics against the baseline, and feature importance |
 | GET | `/api/scenarios` | The preset scenarios |
-| POST | `/api/stock-reports` | Generic stock ingest `{post_id, cls, quantity, observed_at, source}` for the field app now and IoT later |
+| POST | `/api/stock-reports` | Generic stock ingest, as a batch of `{post_id, cls, quantity, observed_at, source}`, for the field app now and IoT later. It invalidates the cached states. |
+| GET | `/api/stock-reports` | Recent non-simulator reports. The dashboard polls this and re-plans when a report arrives. |
 
 Auth is a trivial stub: an optional `X-Operator` header that is logged on ingest.
 
@@ -253,9 +262,10 @@ The UI is one command-dashboard screen with a dark theme and a monospace data ty
 2. **Map (centre):** hillshade terrain. Depots are squares. Posts are circles coloured by worst
    days of stock. Passes are triangles labelled open, closing in N days, or closed. Routes are
    coloured by risk, and planned trips are highlighted as animated dashes.
-3. **Alerts (left):** ranked by severity, using slack = runout − last feasible delivery. For
-   example: "Post Alpha · kerosene · runs out in 9 d · Zojila closes in 6 d · dispatch 2 trucks
-   by Tue 11 Nov". Clicking an alert focuses the post.
+3. **Alerts (left):** one alert per urgent post and class, plus one winter-stock backlog alert
+   per post. An urgent alert is **critical** if the runout is ≤ 3 days, the plan cannot meet
+   it, or the road window closes before the runout. The truck count and the "dispatch by" day
+   come from the plan. Clicking an alert focuses the post.
 4. **Post panel (right):** a stock bar per class with days of stock. A forecast chart for each
    class shows history, forecast and the stock depletion to runout. Below them is a "Why"
    list of the top SHAP drivers.
@@ -266,8 +276,9 @@ The UI is one command-dashboard screen with a dark theme and a monospace data ty
    scenario plan.
 7. **Model (bottom tab):** an MAE/MAPE table comparing the model with the naive baseline, and a
    feature-importance chart.
-8. **Field client (`/field`, stretch goal):** a mobile PWA form that queues reports in
-   localStorage while offline and posts them to `/api/stock-reports` when back online.
+8. **Field client (`/field/`, built):** a mobile PWA, with a service-worker shell cache, that
+   queues reports in localStorage while offline and syncs them in one batch when back online.
+   It has a "simulate no signal" drill switch.
 
 ---
 
