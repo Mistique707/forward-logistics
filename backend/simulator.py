@@ -34,10 +34,11 @@ def weather():
 
 
 @functools.cache
-def climatology():
-    """Day-of-year mean weather per node (366 rows), used beyond the 16-day forecast."""
+def climatology(until):
+    """Day-of-year mean weather per node (366 rows) from data before `until`; no peeking ahead."""
     out = {}
     for k, g in weather().items():
+        g = g[g.index < until]
         c = g.groupby(g.index.dayofyear).mean()
         out[k] = c.reindex(range(1, 367)).interpolate().bfill().ffill()
     return out
@@ -100,7 +101,7 @@ def per_capita(cls, t_mean, t_min, alt, tempo, troops):
     if cls == "rations":
         return 1.4 * (1 + 0.15 * (alt > 3000)) * (1 + 0.01 * np.maximum(0, -t_mean))
     if cls == "kerosene":
-        return 0.03 * hdd * (1 + 0.1 * alt_k) * share
+        return (0.05 + 0.03 * hdd * (1 + 0.1 * alt_k)) * share  # cooking + heating
     if cls == "diesel":
         return (0.25 + 0.012 * hdd) * share
     if cls == "ammunition":
@@ -112,7 +113,7 @@ def per_capita(cls, t_mean, t_min, alt, tempo, troops):
 
 def winter_target(cls, post, troops, year):
     """Advance Winter Stocking target: expected use from 1 Nov to climatological reopening, +10%."""
-    clim = climatology()[post]
+    clim = climatology(f"{year}-06-01")[post]
     days = pd.date_range(f"{year}-11-01", f"{year + 1}-05-15")
     c = clim.loc[days.dayofyear]
     alt = network.load()["by_id"][post]["alt_m"]
