@@ -18,12 +18,38 @@ export default function App() {
   const [cls, setCls] = useState('kerosene')
   const [trip, setTrip] = useState(null)
   const [tab, setTab] = useState('plan')
+  const [reports, setReports] = useState([])
+  const [toast, setToast] = useState(null)
 
   useEffect(() => {
     Promise.all([api('network'), api('scenarios'), api('state?preset=baseline'), api('model')]).then(([n, p, s, m]) => {
       setNet(n); setPresets(p); setBase(s); setState(s); setModel(m)
     })
   }, [])
+
+  // field reports (PWA today, sensors later) land in the stock-ingest API; refresh the picture when one arrives
+  useEffect(() => {
+    if (!base) return
+    let last = null
+    const poll = async () => {
+      const r = await api('stock-reports?limit=6').catch(() => null)
+      if (!r) return
+      setReports(r)
+      const top = r[0]?.id ?? 0
+      if (last !== null && top !== last) {
+        const b = await api('state?preset=baseline')
+        setBase(b)
+        setState(Object.keys(scenario).length ? await api('state', scenario) : b)
+        const n = r[0]
+        setToast(`Field report: ${n.post_id} ${n.cls} ${Math.round(n.quantity).toLocaleString('en-IN')} on hand · picture updated`)
+        setTimeout(() => setToast(null), 6000)
+      }
+      last = top
+    }
+    poll()
+    const id = setInterval(poll, 5000)
+    return () => clearInterval(id)
+  }, [base === null, scenario])
 
   async function run(overrides) {
     setBusy(true)
@@ -42,11 +68,12 @@ export default function App() {
   return (
     <div className="app">
       <TopBar state={state} base={base} scenarioName={scenarioName} onReset={() => run({})} />
-      <Alerts state={state} post={post} onSelect={selectPost} />
+      <Alerts state={state} post={post} onSelect={selectPost} reports={reports} />
       <div className="map panel">
         <MapView net={net} state={state} post={post} trip={trip} onPost={selectPost} />
         {scenarioName && <div className="map-banner"><span className="tag scenario">What-if</span>{scenarioName}</div>}
         {busy && <div className="busy"><div>Re-forecasting · re-planning…</div></div>}
+        {toast && <div className="toast">{toast}</div>}
       </div>
       <div className="side panel">
         <PostPanel state={state} scenario={scenario} post={post} cls={cls} onCls={setCls} onPost={setPost} classes={net.classes} />
@@ -119,7 +146,7 @@ function TopBar({ state, base, scenarioName, onReset }) {
 
 const SEV = { critical: 'Critical', high: 'High', warning: 'Warning' }
 
-function Alerts({ state, post, onSelect }) {
+function Alerts({ state, post, onSelect, reports }) {
   return (
     <div className="alerts panel">
       <div className="panel-head"><h2>Alerts</h2><span className="count">{state.alerts.length} ranked</span></div>
@@ -137,6 +164,11 @@ function Alerts({ state, post, onSelect }) {
         ))}
         <div className="events">
           <h3>Field reports</h3>
+          {reports.map((r) => (
+            <div className="event" key={`r${r.id}`}><span className="mono">{r.observed_at.slice(5, 16).replace('T', ' ')}</span>
+              {r.post_id} reports {r.cls} on hand <b className="mono">{Math.round(r.quantity).toLocaleString('en-IN')}</b>
+              <span className="muted"> · {r.source}</span></div>
+          ))}
           {state.events.map((e, i) => (
             <div className="event" key={i}><span className="mono">{e.date.slice(5)}</span>{e.text}</div>
           ))}

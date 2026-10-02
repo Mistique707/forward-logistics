@@ -163,6 +163,9 @@ if DIST.exists():
     @app.get("/{path:path}")
     def spa(path: str):
         f = (DIST / path).resolve()
-        if path and f.is_file() and DIST.resolve() in f.parents:
-            return FileResponse(f)
+        if DIST.resolve() in f.parents:  # never serve outside dist
+            if f.is_file():
+                return FileResponse(f)
+            if (f / "index.html").is_file():  # /field/ -> the field PWA
+                return FileResponse(f / "index.html")
         return FileResponse(DIST / "index.html")

@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0d0d0d" />
+  <link rel="manifest" href="/field/manifest.webmanifest" />
+  <link rel="icon" href="/favicon.svg" />
+  <title>Field Report · Forward Logistics</title>
+  <style>
+    :root { color-scheme: dark; --page: #0d0d0d; --surface: #1a1a19; --surface-2: #222221; --line: #2c2c2a; --axis: #383835;
+      --ink: #fff; --ink-2: #c3c2b7; --muted: #898781; --good: #0ca30c; --warning: #fab219; --accent: #3987e5; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    main { max-width: 480px; margin: 0 auto; padding: 16px 16px 40px; }
+    header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    h1 { font-size: 13px; letter-spacing: .14em; margin: 0; }
+    header p { margin: 0; font-size: 12px; color: var(--muted); }
+    .pill { margin-left: auto; font: 600 11px system-ui; letter-spacing: .08em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
+    .pill.on { color: var(--good); border-color: var(--good); }
+    .pill.off { color: var(--warning); border-color: var(--warning); }
+    .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+    label { display: block; font-size: 12px; color: var(--ink-2); margin-bottom: 6px; }
+    select, input { width: 100%; background: var(--surface-2); border: 1px solid var(--axis); color: var(--ink); border-radius: 8px; padding: 12px; font-size: 16px; }
+    .row { display: grid; grid-template-columns: 1fr 140px; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .row:last-child { border-bottom: 0; }
+    .row b { font-weight: 600; }
+    .row small { display: block; color: var(--muted); font-size: 12px; }
+    .row input { text-align: right; font-family: ui-monospace, Consolas, monospace; }
+    button { width: 100%; padding: 14px; border-radius: 10px; border: 0; background: var(--accent); color: #fff; font-size: 16px; font-weight: 600; }
+    .toggle { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--ink-2); }
+    .toggle input { width: auto; transform: scale(1.4); }
+    .log div { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--line); color: var(--ink-2); }
+    .log .q { color: var(--warning); }
+    .log .s { color: var(--good); }
+    .msg { font-size: 13px; color: var(--ink-2); margin: 10px 0 0; min-height: 1.4em; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="#222221"/><path d="M5 24 13 9l5 8 3-4 6 11z" fill="none" stroke="#3987e5" stroke-width="2.5" stroke-linejoin="round"/><circle cx="21" cy="13" r="2.5" fill="#fab219"/></svg>
+    <div><h1>FIELD STOCK REPORT</h1><p>Works offline · syncs when signal returns</p></div>
+    <span id="net" class="pill" role="status">…</span>
+  </header>
+
+  <div class="card">
+    <label for="post">Reporting post</label>
+    <select id="post"></select>
+    <label for="op" style="margin-top:12px">Callsign (optional)</label>
+    <input id="op" maxlength="32" placeholder="e.g. ALPHA-QM" autocomplete="off" />
+  </div>
+
+  <form id="form" class="card">
+    <label>Stock on hand now (leave blank to skip)</label>
+    <div id="rows"></div>
+    <button type="submit" style="margin-top:12px">Submit report</button>
+    <p class="msg" id="msg" role="status"></p>
+  </form>
+
+  <div class="card">
+    <label class="toggle" for="force"><span>Simulate no signal (drill)</span><input type="checkbox" id="force" aria-label="Simulate no signal" /></label>
+  </div>
+
+  <div class="card log"><label>Reports on this device</label><div id="log"></div></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id)
+const store = {
+  get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d } catch { return d } },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)) } catch {} },
+}
+const FALLBACK = {
+  posts: ['ALPHA', 'BRAVO', 'CHARLIE', 'DELTA', 'ECHO', 'FOXTROT', 'GOLF', 'HOTEL']
+    .map((id) => ({ id, name: 'Post ' + id[0] + id.slice(1).toLowerCase() })),
+  classes: { kerosene: { label: 'Kerosene', unit: 'L' }, rations: { label: 'Rations', unit: 'kg' }, diesel: { label: 'Diesel', unit: 'L' },
+    ammunition: { label: 'Ammunition', unit: 'kg' }, medical: { label: 'Medical', unit: 'kg' } },
+}
+let meta = store.get('field.meta', FALLBACK)
+const online = () => navigator.onLine && !$('force').checked
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+
+function render() {
+  const sel = store.get('field.post', meta.posts[0].id)
+  $('post').innerHTML = meta.posts.map((p) => `<option value="${esc(p.id)}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('')
+  $('rows').innerHTML = Object.entries(meta.classes).map(([k, c]) =>
+    `<div class="row"><div><b>${esc(c.label)}</b><small>${esc(c.unit)}</small></div><input inputmode="decimal" name="${esc(k)}" placeholder="—" aria-label="${esc(c.label)} in ${esc(c.unit)}" /></div>`).join('')
+  $('op').value = store.get('field.op', '')
+  renderStatus()
+}
+
+function renderStatus() {
+  const q = store.get('field.queue', [])
+  $('net').className = 'pill ' + (online() ? 'on' : 'off')
+  $('net').textContent = online() ? (q.length ? `Syncing ${q.length}` : 'Online') : `Offline · ${q.length} queued`
+  const log = store.get('field.log', [])
+  $('log').innerHTML = log.length ? log.slice(0, 8).map((r) =>
+    `<div><span>${esc(r.time.slice(11, 16))} ${esc(r.post)} ${esc(r.cls)} <b>${esc(r.quantity)}</b></span><span class="${r.synced ? 's' : 'q'}">${r.synced ? 'synced' : 'queued'}</span></div>`).join('')
+    : '<div><span>Nothing reported yet.</span></div>'
+}
+
+async function sync() {
+  const q = store.get('field.queue', [])
+  if (!q.length || !online()) return renderStatus()
+  const op = $('op').value.trim().replace(/[^\w.-]/g, '')
+  try {
+    const r = await fetch('/api/stock-reports', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(op ? { 'x-operator': op } : {}) },
+      body: JSON.stringify(q.map(({ post, cls, quantity, time }) => ({ post_id: post, cls, quantity, observed_at: time, source: 'field-app' }))),
+    })
+    if (!r.ok) throw new Error(r.status)
+    const ids = new Set(q.map((x) => x.uid))
+    store.set('field.queue', store.get('field.queue', []).filter((x) => !ids.has(x.uid)))
+    store.set('field.log', store.get('field.log', []).map((x) => (ids.has(x.uid) ? { ...x, synced: true } : x)))
+    $('msg').textContent = `Synced ${q.length} report(s) to the logistics picture.`
+  } catch {
+    $('msg').textContent = 'Server unreachable: reports stay queued and will retry.'
+  }
+  renderStatus()
+}
+
+$('form').addEventListener('submit', (e) => {
+  e.preventDefault()
+  const post = $('post').value
+  const now = new Date()
+  const time = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 19) // device local time
+  const items = [...new FormData(e.target)]
+    .filter(([, v]) => v.trim() !== '' && Number.isFinite(Number(v)) && Number(v) >= 0)
+    .map(([cls, v]) => ({ uid: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()), post, cls, quantity: Number(v), time }))
+  if (!items.length) { $('msg').textContent = 'Enter at least one quantity.'; return }
+  store.set('field.queue', [...store.get('field.queue', []), ...items])
+  store.set('field.log', [...items, ...store.get('field.log', [])].slice(0, 50))
+  e.target.reset()
+  $('msg').textContent = online() ? 'Sending…' : `Saved on device. ${items.length} report(s) will sync when signal returns.`
+  sync()
+})
+$('post').addEventListener('change', (e) => store.set('field.post', e.target.value))
+$('op').addEventListener('change', (e) => store.set('field.op', e.target.value))
+$('force').addEventListener('change', () => { renderStatus(); sync() })
+addEventListener('online', sync)
+addEventListener('offline', renderStatus)
+setInterval(sync, 15000)
+
+fetch('/api/network').then((r) => r.json()).then((n) => {
+  meta = {
+    posts: n.nodes.filter((x) => x.type === 'post').map((x) => ({ id: x.id, name: x.name })),
+    classes: Object.fromEntries(['kerosene', 'rations', 'diesel', 'ammunition', 'medical'].map((k) => [k, n.classes[k]])),
+  }
+  store.set('field.meta', meta)
+  render()
+}).catch(render)
+render()
+sync()
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/field/sw.js', { scope: '/field/' })
+</script>
+</body>
+</html>
