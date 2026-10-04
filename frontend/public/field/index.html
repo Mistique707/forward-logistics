@@ -3,66 +3,91 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0d0d0d" />
+  <meta name="theme-color" content="#1f5fbf" />
   <link rel="manifest" href="/field/manifest.webmanifest" />
   <link rel="icon" href="/favicon.svg" />
-  <title>Field Report · Forward Logistics</title>
+  <title>Inventory Check · Forward Logistics</title>
   <style>
-    :root { color-scheme: dark; --page: #0d0d0d; --surface: #1a1a19; --surface-2: #222221; --line: #2c2c2a; --axis: #383835;
-      --ink: #fff; --ink-2: #c3c2b7; --muted: #898781; --good: #0ca30c; --warning: #fab219; --accent: #3987e5; }
+    :root { color-scheme: light; --page: #f3f4f6; --surface: #fff; --surface-2: #f7f8fa; --line: #e2e5ea; --line-2: #cfd4db;
+      --ink: #16191e; --ink-2: #464d58; --muted: #6a717d; --accent: #1f5fbf; --accent-soft: #e8f0fb;
+      --good: #1a7f37; --good-soft: #e6f4ea; --warning: #9a5b00; --warning-soft: #fdf2dc; --critical: #c42b1c; }
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif; }
-    main { max-width: 480px; margin: 0 auto; padding: 16px 16px 40px; }
-    header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-    h1 { font-size: 13px; letter-spacing: .14em; margin: 0; }
-    header p { margin: 0; font-size: 12px; color: var(--muted); }
-    .pill { margin-left: auto; font: 600 11px system-ui; letter-spacing: .08em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
-    .pill.on { color: var(--good); border-color: var(--good); }
-    .pill.off { color: var(--warning); border-color: var(--warning); }
-    .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
-    label { display: block; font-size: 12px; color: var(--ink-2); margin-bottom: 6px; }
-    select, input { width: 100%; background: var(--surface-2); border: 1px solid var(--axis); color: var(--ink); border-radius: 8px; padding: 12px; font-size: 16px; }
-    .row { display: grid; grid-template-columns: 1fr 140px; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
-    .row:last-child { border-bottom: 0; }
-    .row b { font-weight: 600; }
-    .row small { display: block; color: var(--muted); font-size: 12px; }
+    body { margin: 0; background: var(--page); color: var(--ink); font: 16px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif;
+      padding-bottom: env(safe-area-inset-bottom, 0px); }
+    main { max-width: 520px; margin: 0 auto; padding: 16px; display: grid; gap: 12px; }
+    header { display: flex; align-items: center; gap: 10px; }
+    h1 { font-size: 17px; margin: 0; }
+    header p { margin: 0; font-size: 13px; color: var(--muted); }
+    .pill { margin-left: auto; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+    .pill.on { color: var(--good); background: var(--good-soft); }
+    .pill.off { color: var(--warning); background: var(--warning-soft); }
+    .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+    label { display: block; font-size: 13px; color: var(--ink-2); margin: 0 0 6px; }
+    select, input { width: 100%; background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); border-radius: 8px; padding: 11px 12px; font-size: 16px; }
+    .seg { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line-2); border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
+    .seg button { border: 0; background: var(--surface); padding: 10px 6px; font-size: 14px; color: var(--ink-2); }
+    .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+    .hint { font-size: 13px; color: var(--muted); margin: 0 0 8px; }
+    .row { display: grid; grid-template-columns: 1fr 150px; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+    .row b { font-weight: 600; } .row small { display: block; color: var(--muted); font-size: 12px; }
     .row input { text-align: right; font-family: ui-monospace, Consolas, monospace; }
-    button { width: 100%; padding: 14px; border-radius: 10px; border: 0; background: var(--accent); color: #fff; font-size: 16px; font-weight: 600; }
-    .toggle { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--ink-2); }
-    .toggle input { width: auto; transform: scale(1.4); }
-    .log div { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--line); color: var(--ink-2); }
-    .log .q { color: var(--warning); }
-    .log .s { color: var(--good); }
-    .msg { font-size: 13px; color: var(--ink-2); margin: 10px 0 0; min-height: 1.4em; }
+    button.primary { width: 100%; padding: 14px; border-radius: 10px; border: 0; background: var(--accent); color: #fff; font-size: 16px; font-weight: 600; margin-top: 10px; }
+    button.link { border: 0; background: none; color: var(--accent); padding: 0; font-size: 14px; font-weight: 500; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .toggle { display: flex; align-items: center; justify-content: space-between; font-size: 14px; color: var(--ink-2); margin: 0; }
+    .toggle input { width: 22px; height: 22px; }
+    .log div { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; padding: 7px 0; border-top: 1px solid var(--line); color: var(--ink-2); }
+    .log .q { color: var(--warning); font-weight: 600; } .log .s { color: var(--good); font-weight: 600; }
+    .msg { font-size: 14px; color: var(--ink-2); margin: 10px 0 0; min-height: 1.4em; }
+    [hidden] { display: none !important; }
   </style>
 </head>
 <body>
 <main>
   <header>
-    <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="#222221"/><path d="M5 24 13 9l5 8 3-4 6 11z" fill="none" stroke="#3987e5" stroke-width="2.5" stroke-linejoin="round"/><circle cx="21" cy="13" r="2.5" fill="#fab219"/></svg>
-    <div><h1>FIELD STOCK REPORT</h1><p>Works offline · syncs when signal returns</p></div>
+    <svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#1f5fbf"/><path d="M5 24 13 9l5 8 3-4 6 11z" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/><circle cx="21" cy="12" r="2.4" fill="#fbd38d"/></svg>
+    <div><h1>Inventory check</h1><p>Works offline · sends when signal returns</p></div>
     <span id="net" class="pill" role="status">…</span>
   </header>
 
-  <div class="card">
-    <label for="post">Reporting post</label>
-    <select id="post"></select>
-    <label for="op" style="margin-top:12px">Callsign (optional)</label>
-    <input id="op" maxlength="32" placeholder="e.g. ALPHA-QM" autocomplete="off" />
-  </div>
+  <section class="card">
+    <label for="site">Site</label>
+    <select id="site"></select>
+    <p class="hint" id="sitehint" style="margin-top:8px"></p>
+    <button class="link" id="showreg" type="button">+ Register a new site to collect real data</button>
+    <form id="reg" hidden style="margin-top:12px">
+      <label for="rname">Site name (e.g. Hostel mess, Unit canteen)</label>
+      <input id="rname" required minlength="2" maxlength="60" autocomplete="off" />
+      <div class="grid2" style="margin-top:10px">
+        <div><label for="rlat">Latitude</label><input id="rlat" required inputmode="decimal" /></div>
+        <div><label for="rlon">Longitude</label><input id="rlon" required inputmode="decimal" /></div>
+      </div>
+      <button class="link" id="locate" type="button" style="margin-top:8px">Use this device's location</button>
+      <label for="rhead" style="margin-top:10px">People served each day</label>
+      <input id="rhead" required inputmode="numeric" />
+      <button class="primary" type="submit">Register site</button>
+    </form>
+  </section>
 
   <form id="form" class="card">
-    <label>Stock on hand now (leave blank to skip)</label>
+    <div class="seg" role="tablist" aria-label="Record type">
+      <button type="button" data-kind="count" class="on">Stock count</button>
+      <button type="button" data-kind="receipt">Received</button>
+      <button type="button" data-kind="issue">Issued</button>
+    </div>
+    <p class="hint" id="kindhint"></p>
     <div id="rows"></div>
-    <button type="submit" style="margin-top:12px">Submit report</button>
+    <label for="op" style="margin-top:12px">Your callsign (optional)</label>
+    <input id="op" maxlength="32" placeholder="e.g. QM-ALPHA" autocomplete="off" />
+    <button class="primary" type="submit">Save record</button>
     <p class="msg" id="msg" role="status"></p>
   </form>
 
-  <div class="card">
-    <label class="toggle" for="force"><span>Simulate no signal (drill)</span><input type="checkbox" id="force" aria-label="Simulate no signal" /></label>
-  </div>
+  <section class="card">
+    <label class="toggle" for="force"><span>Simulate no signal (drill)</span><input type="checkbox" id="force" /></label>
+  </section>
 
-  <div class="card log"><label>Reports on this device</label><div id="log"></div></div>
+  <section class="card log"><label>Records on this device</label><div id="log"></div></section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id)
@@ -70,87 +95,136 @@ const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d } catch { return d } },
   set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)) } catch {} },
 }
-const FALLBACK = {
-  posts: ['ALPHA', 'BRAVO', 'CHARLIE', 'DELTA', 'ECHO', 'FOXTROT', 'GOLF', 'HOTEL']
-    .map((id) => ({ id, name: 'Post ' + id[0] + id.slice(1).toLowerCase() })),
-  classes: { kerosene: { label: 'Kerosene', unit: 'L' }, rations: { label: 'Rations', unit: 'kg' }, diesel: { label: 'Diesel', unit: 'L' },
-    ammunition: { label: 'Ammunition', unit: 'kg' }, medical: { label: 'Medical', unit: 'kg' } },
+const ITEMS = {
+  kerosene: { label: 'Kerosene / cooking fuel', unit: 'L' }, rations: { label: 'Rations / food', unit: 'kg' },
+  diesel: { label: 'Diesel', unit: 'L' }, ammunition: { label: 'Ammunition', unit: 'kg', demoOnly: true },
+  medical: { label: 'Medical stores', unit: 'kg' },
 }
-let meta = store.get('field.meta', FALLBACK)
+const KIND = {
+  count: 'Count what is physically on hand right now.',
+  receipt: 'Enter what arrived since your last record.',
+  issue: 'Enter what was issued or used today.',
+}
+const DEMO = ['ALPHA', 'BRAVO', 'CHARLIE', 'DELTA', 'ECHO', 'FOXTROT', 'GOLF', 'HOTEL'].map((id) => ({ id, name: 'Post ' + id[0] + id.slice(1).toLowerCase(), kind: 'demo' }))
+let sites = store.get('ic.sites', DEMO)
+let kind = 'count'
 const online = () => navigator.onLine && !$('force').checked
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+const site = () => sites.find((s) => s.id === $('site').value) || sites[0]
 
-function render() {
-  const sel = store.get('field.post', meta.posts[0].id)
-  $('post').innerHTML = meta.posts.map((p) => `<option value="${esc(p.id)}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('')
-  $('rows').innerHTML = Object.entries(meta.classes).map(([k, c]) =>
+function renderSites() {
+  const sel = store.get('ic.site', sites[0].id)
+  const group = (k, label) => {
+    const xs = sites.filter((s) => s.kind === k)
+    return xs.length ? `<optgroup label="${label}">${xs.map((s) => `<option value="${esc(s.id)}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</optgroup>` : ''
+  }
+  $('site').innerHTML = group('live', 'Live sites (real data)') + group('demo', 'Demo posts')
+  renderRows()
+}
+
+function renderRows() {
+  const s = site()
+  $('sitehint').textContent = s.kind === 'live'
+    ? `Live site · ${s.headcount} people · records here train the forecast on real usage.`
+    : 'Demo post · records are dated to the demo day and update the dashboard at once.'
+  $('kindhint').textContent = KIND[kind]
+  $('rows').innerHTML = Object.entries(ITEMS).filter(([, c]) => s.kind === 'demo' || !c.demoOnly).map(([k, c]) =>
     `<div class="row"><div><b>${esc(c.label)}</b><small>${esc(c.unit)}</small></div><input inputmode="decimal" name="${esc(k)}" placeholder="—" aria-label="${esc(c.label)} in ${esc(c.unit)}" /></div>`).join('')
-  $('op').value = store.get('field.op', '')
-  renderStatus()
 }
 
 function renderStatus() {
-  const q = store.get('field.queue', [])
+  const q = store.get('ic.queue', [])
   $('net').className = 'pill ' + (online() ? 'on' : 'off')
-  $('net').textContent = online() ? (q.length ? `Syncing ${q.length}` : 'Online') : `Offline · ${q.length} queued`
-  const log = store.get('field.log', [])
-  $('log').innerHTML = log.length ? log.slice(0, 8).map((r) =>
-    `<div><span>${esc(r.time.slice(11, 16))} ${esc(r.post)} ${esc(r.cls)} <b>${esc(r.quantity)}</b></span><span class="${r.synced ? 's' : 'q'}">${r.synced ? 'synced' : 'queued'}</span></div>`).join('')
-    : '<div><span>Nothing reported yet.</span></div>'
+  $('net').textContent = online() ? (q.length ? `Sending ${q.length}` : 'Online') : `Offline · ${q.length} waiting`
+  const log = store.get('ic.log', [])
+  $('log').innerHTML = log.length ? log.slice(0, 10).map((r) =>
+    `<div><span>${esc(r.time.slice(5, 16).replace('T', ' '))} · ${esc(r.site)} · ${esc(r.kind)} ${esc(r.cls)} <b>${esc(r.quantity)}</b></span><span class="${r.synced ? 's' : 'q'}">${r.synced ? 'sent' : 'waiting'}</span></div>`).join('')
+    : '<div><span>Nothing recorded on this device yet.</span></div>'
 }
 
 async function sync() {
-  const q = store.get('field.queue', [])
+  const q = store.get('ic.queue', [])
   if (!q.length || !online()) return renderStatus()
   const op = $('op').value.trim().replace(/[^\w.-]/g, '')
   try {
-    const r = await fetch('/api/stock-reports', {
+    const r = await fetch('/api/inventory', {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(op ? { 'x-operator': op } : {}) },
-      body: JSON.stringify(q.map(({ post, cls, quantity, time }) => ({ post_id: post, cls, quantity, observed_at: time, source: 'field-app' }))),
+      body: JSON.stringify(q.map(({ site, cls, kind, quantity, time }) => ({ site_id: site, cls, kind, quantity, observed_at: time, source: 'field-app' }))),
     })
     if (!r.ok) throw new Error(r.status)
     const ids = new Set(q.map((x) => x.uid))
-    store.set('field.queue', store.get('field.queue', []).filter((x) => !ids.has(x.uid)))
-    store.set('field.log', store.get('field.log', []).map((x) => (ids.has(x.uid) ? { ...x, synced: true } : x)))
-    $('msg').textContent = `Synced ${q.length} report(s) to the logistics picture.`
+    store.set('ic.queue', store.get('ic.queue', []).filter((x) => !ids.has(x.uid)))
+    store.set('ic.log', store.get('ic.log', []).map((x) => (ids.has(x.uid) ? { ...x, synced: true } : x)))
+    $('msg').textContent = `Sent ${q.length} record(s).`
   } catch {
-    $('msg').textContent = 'Server unreachable: reports stay queued and will retry.'
+    $('msg').textContent = 'Server unreachable: records stay on this device and will retry.'
   }
   renderStatus()
 }
 
+async function loadSites() {
+  try {
+    const r = await fetch('/api/sites')
+    if (!r.ok) throw new Error(r.status)
+    sites = await r.json()
+    store.set('ic.sites', sites)
+  } catch {}
+  renderSites()
+}
+
+document.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => {
+  kind = b.dataset.kind
+  document.querySelectorAll('.seg button').forEach((x) => x.classList.toggle('on', x === b))
+  renderRows()
+}))
+
 $('form').addEventListener('submit', (e) => {
   e.preventDefault()
-  const post = $('post').value
+  const s = site()
   const now = new Date()
   const time = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 19) // device local time
-  const items = [...new FormData(e.target)]
+  const items = [...new FormData(e.target)].filter(([k]) => ITEMS[k])
     .filter(([, v]) => v.trim() !== '' && Number.isFinite(Number(v)) && Number(v) >= 0)
-    .map(([cls, v]) => ({ uid: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()), post, cls, quantity: Number(v), time }))
+    .map(([cls, v]) => ({ uid: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()), site: s.id, cls, kind, quantity: Number(v), time }))
   if (!items.length) { $('msg').textContent = 'Enter at least one quantity.'; return }
-  store.set('field.queue', [...store.get('field.queue', []), ...items])
-  store.set('field.log', [...items, ...store.get('field.log', [])].slice(0, 50))
-  e.target.reset()
-  $('msg').textContent = online() ? 'Sending…' : `Saved on device. ${items.length} report(s) will sync when signal returns.`
+  store.set('ic.queue', [...store.get('ic.queue', []), ...items])
+  store.set('ic.log', [...items, ...store.get('ic.log', [])].slice(0, 60))
+  $('rows').querySelectorAll('input').forEach((i) => { i.value = '' })
+  $('msg').textContent = online() ? 'Sending…' : `Saved on this device. ${items.length} record(s) will send when signal returns.`
   sync()
 })
-$('post').addEventListener('change', (e) => store.set('field.post', e.target.value))
-$('op').addEventListener('change', (e) => store.set('field.op', e.target.value))
+
+$('showreg').addEventListener('click', () => { $('reg').hidden = !$('reg').hidden })
+$('locate').addEventListener('click', () => {
+  if (!navigator.geolocation) { $('msg').textContent = 'This device cannot share its location; type it in.'; return }
+  navigator.geolocation.getCurrentPosition((p) => { $('rlat').value = p.coords.latitude.toFixed(5); $('rlon').value = p.coords.longitude.toFixed(5) },
+    () => { $('msg').textContent = 'Location was not shared; type latitude and longitude instead.' })
+})
+$('reg').addEventListener('submit', async (e) => {
+  e.preventDefault()
+  if (!online()) { $('msg').textContent = 'Registering a site needs a connection.'; return }
+  const body = { name: $('rname').value.trim(), lat: Number($('rlat').value), lon: Number($('rlon').value), headcount: Number($('rhead').value) }
+  if (![body.lat, body.lon, body.headcount].every(Number.isFinite)) { $('msg').textContent = 'Check the latitude, longitude and number of people.'; return }
+  const r = await fetch('/api/sites', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  if (!r.ok) { $('msg').textContent = 'The site could not be registered. Check the values and try again.'; return }
+  const { id } = await r.json()
+  store.set('ic.site', id)
+  e.target.reset(); $('reg').hidden = true
+  $('msg').textContent = `Registered ${body.name}. Start with a stock count.`
+  loadSites()
+})
+$('site').addEventListener('change', (e) => { store.set('ic.site', e.target.value); renderRows() })
+$('op').addEventListener('change', (e) => store.set('ic.op', e.target.value))
 $('force').addEventListener('change', () => { renderStatus(); sync() })
 addEventListener('online', sync)
 addEventListener('offline', renderStatus)
 setInterval(sync, 15000)
 
-fetch('/api/network').then((r) => r.json()).then((n) => {
-  meta = {
-    posts: n.nodes.filter((x) => x.type === 'post').map((x) => ({ id: x.id, name: x.name })),
-    classes: Object.fromEntries(['kerosene', 'rations', 'diesel', 'ammunition', 'medical'].map((k) => [k, n.classes[k]])),
-  }
-  store.set('field.meta', meta)
-  render()
-}).catch(render)
-render()
+$('op').value = store.get('ic.op', '')
+renderSites()
+renderStatus()
+loadSites()
 sync()
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/field/sw.js', { scope: '/field/' })
 </script>

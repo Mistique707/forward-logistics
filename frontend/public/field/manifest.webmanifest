@@ -1,10 +1,10 @@
 {
-  "name": "Forward Logistics · Field Report",
-  "short_name": "Field Report",
+  "name": "Forward Logistics · Inventory Check",
+  "short_name": "Inventory",
   "start_url": "/field/",
   "scope": "/field/",
   "display": "standalone",
-  "background_color": "#0d0d0d",
-  "theme_color": "#0d0d0d",
+  "background_color": "#f3f4f6",
+  "theme_color": "#1f5fbf",
   "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
 }

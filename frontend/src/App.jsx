@@ -1,47 +1,46 @@
 import { useEffect, useState } from 'react'
-import MapView from './MapView.jsx'
-import PostPanel from './PostPanel.jsx'
+import Overview from './Overview.jsx'
 import PlanView from './PlanView.jsx'
 import WhatIf from './WhatIf.jsx'
-import ModelView from './ModelView.jsx'
+import Learning from './Learning.jsx'
+import DataView from './DataView.jsx'
 import { api, dayLabel, lakh, num } from './util.js'
+
+const VIEWS = [['overview', 'Overview'], ['plan', 'Dispatch plan'], ['whatif', 'What-if'], ['learning', 'Forecast & learning'],
+  ['data', 'Data sources']]
 
 export default function App() {
   const [net, setNet] = useState(null)
   const [presets, setPresets] = useState([])
-  const [model, setModel] = useState(null)
   const [base, setBase] = useState(null)
   const [state, setState] = useState(null)
-  const [scenario, setScenario] = useState({}) // overrides currently applied
+  const [scenario, setScenario] = useState({})
   const [busy, setBusy] = useState(false)
+  const [view, setView] = useState('overview')
   const [post, setPost] = useState(null)
   const [cls, setCls] = useState('kerosene')
-  const [trip, setTrip] = useState(null)
-  const [tab, setTab] = useState('plan')
-  const [reports, setReports] = useState([])
   const [toast, setToast] = useState(null)
 
   useEffect(() => {
-    Promise.all([api('network'), api('scenarios'), api('state?preset=baseline'), api('model')]).then(([n, p, s, m]) => {
-      setNet(n); setPresets(p); setBase(s); setState(s); setModel(m)
+    Promise.all([api('network'), api('scenarios'), api('state?preset=baseline')]).then(([n, p, s]) => {
+      setNet(n); setPresets(p); setBase(s); setState(s)
     })
   }, [])
 
-  // field reports (PWA today, sensors later) land in the stock-ingest API; refresh the picture when one arrives
+  // inventory checks (field app today, sensors later) refresh the picture as they arrive
   useEffect(() => {
     if (!base) return
     let last = null
     const poll = async () => {
-      const r = await api('stock-reports?limit=6').catch(() => null)
+      const r = await api('inventory?limit=1').catch(() => null)
       if (!r) return
-      setReports(r)
       const top = r[0]?.id ?? 0
       if (last !== null && top !== last) {
         const b = await api('state?preset=baseline')
         setBase(b)
         setState(Object.keys(scenario).length ? await api('state', scenario) : b)
-        const n = r[0]
-        setToast(`Field report: ${n.post_id} ${n.cls} ${Math.round(n.quantity).toLocaleString('en-IN')} on hand · picture updated`)
+        const e = r[0]
+        setToast(`Inventory check received: ${e.site_id} ${e.cls} ${e.kind} ${num(e.quantity)}. The picture is updated.`)
         setTimeout(() => setToast(null), 6000)
       }
       last = top
@@ -55,137 +54,78 @@ export default function App() {
     setBusy(true)
     try {
       const s = Object.keys(overrides).length ? await api('state', overrides) : base
-      setScenario(overrides); setState(s); setTrip(null)
+      setScenario(overrides); setState(s)
     } finally { setBusy(false) }
   }
 
   if (!state || !net) return <div className="empty" style={{ paddingTop: '40vh' }}>Building the supply picture…</div>
-
-  const scenarioName = state.preset === 'baseline' ? null
-    : presets.find((p) => p.id === state.preset)?.name || 'Custom scenario'
-  const selectPost = (id, c) => { setPost(id); if (c) setCls(c) }
+  const scenarioName = state.preset === 'baseline' ? null : presets.find((p) => p.id === state.preset)?.name || 'Custom scenario'
+  const openPost = (id, c) => { setPost(id); if (c) setCls(c); setView('overview') }
 
   return (
-    <div className={`app ${tab === 'whatif' ? 'tall' : ''}`}>
-      <TopBar state={state} base={base} scenarioName={scenarioName} onReset={() => run({})} />
-      <Alerts state={state} post={post} onSelect={selectPost} reports={reports} />
-      <div className="map panel">
-        <MapView net={net} state={state} post={post} trip={trip} onPost={selectPost} />
-        {scenarioName && <div className="map-banner"><span className="tag scenario">What-if</span>{scenarioName}</div>}
-        {busy && <div className="busy"><div>Re-forecasting · re-planning…</div></div>}
-        {toast && <div className="toast">{toast}</div>}
-      </div>
-      <div className="side panel">
-        <PostPanel state={state} scenario={scenario} post={post} cls={cls} onCls={setCls} onPost={setPost} classes={net.classes} />
-      </div>
-      <div className="bottom panel">
-        <div className="tabs">
-          {[['plan', 'Dispatch plan', state.plan.trips.length], ['whatif', 'What-if simulator'], ['model', 'Forecast model']].map(([id, label, n]) => (
-            <button key={id} className={`tab ${tab === id ? 'on' : ''}`} onClick={() => setTab(id)}>
-              {label}{n !== undefined && <span className="badge">{n}</span>}
-            </button>
-          ))}
-          <div className="spacer" />
-          <PlanSummary state={state} />
+    <div className="shell">
+      <header className="top">
+        <div className="brand">
+          <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#1f5fbf" />
+            <path d="M5 24 13 9l5 8 3-4 6 11z" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinejoin="round" /><circle cx="21" cy="12" r="2.4" fill="#fbd38d" /></svg>
+          <div><h1>Forward Logistics</h1><p>Ladakh sector · winter supply picture</p></div>
         </div>
-        {tab === 'plan' && <PlanView state={state} trip={trip} onTrip={setTrip} classes={net.classes} />}
-        {tab === 'whatif' && <WhatIf presets={presets} state={state} base={base} busy={busy} onRun={run} net={net} />}
-        {tab === 'model' && <ModelView model={model} classes={net.classes} />}
-      </div>
+        {scenarioName && <span className="chip">What-if: {scenarioName}<button onClick={() => run({})}>Back to today</button></span>}
+        <div className="date"><b>{dayLabel(state.demo_date, 0)} 2025</b><span>simulated date · synthetic post data on real terrain and weather</span></div>
+        <a className="linkbtn" href="/field/" target="_blank" rel="noreferrer">Open inventory check ↗</a>
+      </header>
+      <nav className="nav" aria-label="Views">
+        {VIEWS.map(([id, label]) => <button key={id} className={view === id ? 'on' : ''} onClick={() => setView(id)}>{label}</button>)}
+      </nav>
+      <Kpis state={state} base={scenarioName ? base : null} />
+      <main className="view">
+        {view === 'overview' && <Overview state={state} net={net} scenario={scenario} post={post} cls={cls} onPost={setPost} onCls={setCls}
+          busy={busy} scenarioName={scenarioName} />}
+        {view === 'plan' && <PlanView state={state} net={net} onPost={openPost} />}
+        {view === 'whatif' && <WhatIf presets={presets} state={state} base={base} busy={busy} onRun={run} net={net} />}
+        {view === 'learning' && <Learning onChange={() => run(scenario)} />}
+        {view === 'data' && <DataView />}
+      </main>
+      {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   )
 }
 
-function Kpi({ k, v, unit, before, better = 'down', tone, fmt = (x) => x }) {
-  const delta = before !== undefined && before !== null && v !== before && typeof v === 'number' ? v - before : null
-  const worse = delta !== null && (better === 'down' ? delta > 0 : delta < 0)
-  return (
-    <div className={`kpi ${tone || ''}`}>
-      <div className="k">{k}</div>
-      <div className="v">{v === null || v === undefined ? '—' : fmt(v)}{unit && <small>{unit}</small>}
-        {delta !== null && <span className={`d ${worse ? 'up' : 'down'}`}>{delta > 0 ? '▲' : '▼'}{fmt(Math.abs(delta))}</span>}
-      </div>
-    </div>
-  )
+function Delta({ v, b, better = 'down', fmt = (x) => x }) {
+  if (b === null || b === undefined || v === b || typeof v !== 'number') return null
+  const tone = better === 'none' ? '' : (better === 'down' ? v > b : v < b) ? 'worse' : 'better'
+  return <span className={`delta ${tone}`}>{v > b ? '▲' : '▼'} {fmt(Math.abs(v - b))}</span>
 }
 
-function TopBar({ state, base, scenarioName, onReset }) {
+function Kpis({ state, base }) {
   const k = state.kpis
-  const b = scenarioName ? base.kpis : {}
+  const b = base?.kpis || {}
   const zo = state.passes[0]
+  const demo = state.demo_date
+  const lifts = [k.trucks && `${k.trucks} truck${k.trucks > 1 ? 's' : ''}`, k.heli_sorties && `${k.heli_sorties} helicopter sortie${k.heli_sorties > 1 ? 's' : ''}`,
+    k.airdrops && `${k.airdrops} airdrop${k.airdrops > 1 ? 's' : ''}`].filter(Boolean).join(' · ') || 'nothing to send'
   return (
-    <div className="top">
-      <div className="brand">
-        <div className="brand-mark">
-          <svg width="20" height="20" viewBox="0 0 32 32"><path d="M3 26 13 7l5 9 3-4 8 14z" fill="none" stroke="#3987e5" strokeWidth="2.6" strokeLinejoin="round" /><circle cx="21" cy="12" r="2.6" fill="#fab219" /></svg>
-        </div>
-        <div>
-          <h1>FORWARD LOGISTICS</h1>
-          <p>Northern Sector · predictive supply picture</p>
-        </div>
+    <section className="kpis" aria-label="Summary">
+      <div className={`kpi ${k.posts_at_risk ? 'bad' : ''}`}>
+        <div className="k">Posts that need action</div>
+        <div className="v">{k.posts_at_risk}<small>of 8</small><Delta v={k.posts_at_risk} b={b.posts_at_risk} /></div>
+        <div className="s">{k.earliest_runout !== null ? `first runout in ${k.earliest_runout} days without action` : 'no runout in sight'}</div>
       </div>
-      <div className="kpis">
-        <Kpi k="Posts at risk" v={k.posts_at_risk} before={b.posts_at_risk} tone={k.posts_at_risk ? 'alarm' : ''} />
-        <Kpi k="Zoji La" v={zo.close_day === 0 ? 'CLOSED' : zo.close_day == null ? 'OPEN' : `closes ${zo.close_day} d`}
-          tone={zo.close_day !== null && zo.close_day < 14 ? 'warn' : ''} />
-        <Kpi k="Earliest runout" v={k.earliest_runout} unit="d" before={b.earliest_runout} better="up" />
-        <Kpi k="Planned lift" v={k.tonnes_planned} unit="t" before={b.tonnes_planned} fmt={(x) => num(x, 1)} />
-        <Kpi k="Plan cost" v={k.cost_lakh} before={b.cost_lakh} fmt={lakh} />
-        <Kpi k="Air liability" v={k.air_liability_t} unit="t" before={b.air_liability_t} fmt={(x) => num(x, 1)}
-          tone={k.air_liability_t ? 'warn' : ''} />
-        <Kpi k="Unmet" v={k.unmet_t} unit="t" before={b.unmet_t} fmt={(x) => num(x, 1)} tone={k.unmet_t ? 'alarm' : ''} />
+      <div className={`kpi ${zo.close_day !== null && zo.close_day < 14 ? 'warn' : ''}`}>
+        <div className="k">Zoji La (the only road in)</div>
+        <div className="v">{zo.close_day === 0 ? 'Closed' : zo.close_day === null ? 'Open' : `closes in ${zo.close_day} d`}</div>
+        <div className="s">{zo.close_day ? `${dayLabel(demo, zo.close_day)} · ` : ''}{zo.reopen_day !== null ? `reopens about ${dayLabel(demo, zo.reopen_day)}` : 'no closure forecast'}</div>
       </div>
-      {scenarioName && <span className="tag scenario" onClick={onReset} title="Back to baseline">Scenario <b>{scenarioName}</b> ✕</span>}
-      <div className="clock">
-        <div className="k">SIMULATED DATE · <span className="tag">synthetic data</span></div>
-        <div className="v">{dayLabel(state.demo_date, 0)} 2025 · 06:00</div>
+      <div className="kpi">
+        <div className="k">To send now</div>
+        <div className="v">{num(k.tonnes_planned, 1)}<small>t</small><Delta v={k.tonnes_planned} b={b.tonnes_planned} better="none" fmt={(x) => num(x, 1)} /></div>
+        <div className="s">{lifts}{k.dispatch_by ? ` · first leaves by ${k.dispatch_by}` : ''}</div>
       </div>
-    </div>
-  )
-}
-
-const SEV = { critical: 'Critical', high: 'High', warning: 'Warning' }
-
-function Alerts({ state, post, onSelect, reports }) {
-  return (
-    <div className="alerts panel">
-      <div className="panel-head"><h2>Alerts</h2><span className="count">{state.alerts.length} ranked</span></div>
-      <div className="scroll">
-        {state.alerts.length === 0 && <div className="empty">All posts on target.</div>}
-        {state.alerts.map((a, i) => (
-          <button key={i} className={`alert ${a.severity} ${post === a.post ? 'sel' : ''}`} onClick={() => onSelect(a.post, a.cls)}>
-            <div className={`sev sev-${a.severity}`}>
-              <span className="sev-dot" style={{ background: 'currentColor' }} />{SEV[a.severity]}
-              <span className="when">{a.cls ? (a.days === null ? '' : `${a.days} d`) : 'winter stock'}</span>
-            </div>
-            <div className="title">{a.title}</div>
-            <div className="text">{a.text}</div>
-          </button>
-        ))}
-        <div className="events">
-          <h3>Field reports</h3>
-          {reports.map((r) => (
-            <div className="event" key={`r${r.id}`}><span className="mono">{r.observed_at.slice(5, 16).replace('T', ' ')}</span>
-              {r.post_id} reports {r.cls} on hand <b className="mono">{Math.round(r.quantity).toLocaleString('en-IN')}</b>
-              <span className="muted"> · {r.source}</span></div>
-          ))}
-          {state.events.map((e, i) => (
-            <div className="event" key={i}><span className="mono">{e.date.slice(5)}</span>{e.text}</div>
-          ))}
-        </div>
+      <div className={`kpi ${k.unmet_t ? 'bad' : ''}`}>
+        <div className="k">Cost of this plan</div>
+        <div className="v">{lakh(k.cost_lakh)}<Delta v={k.cost_lakh} b={b.cost_lakh} fmt={(x) => num(x, 1)} /></div>
+        <div className="s">{k.unmet_t ? `${num(k.unmet_t, 1)} t cannot reach in time` : k.air_liability_t ? `+ ${lakh(k.air_liability_lakh)} to fly in ${num(k.air_liability_t, 1)} t later` : 'nothing left for winter airlift'}</div>
       </div>
-    </div>
-  )
-}
-
-function PlanSummary({ state }) {
-  const bm = state.plan.totals.by_mode
-  return (
-    <div className="summary">
-      {['truck', 'heli', 'airdrop'].map((m) => bm[m] && (
-        <span key={m}>{{ truck: 'Trucks', heli: 'Heli sorties', airdrop: 'Airdrops' }[m]} <b>{bm[m].trips}</b> · <b>{num(bm[m].kg / 1000, 1)} t</b></span>
-      ))}
-      {state.kpis.dispatch_by && <span>First dispatch by <b className="deadline">{state.kpis.dispatch_by}</b></span>}
-    </div>
+    </section>
   )
 }

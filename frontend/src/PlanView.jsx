@@ -1,52 +1,57 @@
-import { CLASS_ORDER, MODES, hourLabel, lakh, num } from './util.js'
+import { useState } from 'react'
+import MapView from './MapView.jsx'
+import { CLASS_ORDER, MODES, PASS, PLACE, hourLabel, lakh, num, tonnes } from './util.js'
 
-const PASS = { ZOJILA: 'Zoji La', KHARDUNG: 'Khardung La', CHANG: 'Chang La' }
-const NAME = { SAPPHIRE: 'Sapphire', ONYX: 'Onyx' }
-
-export default function PlanView({ state, trip, onTrip, classes }) {
+export default function PlanView({ state, net, onPost }) {
+  const [focus, setFocus] = useState(null)
   const { trips, unmet, deferred, totals } = state.plan
   const demo = state.demo_date
-  const items = (s) => CLASS_ORDER.filter((k) => s.items[k]).map((k) => (
-    <span key={k}><b>{num(s.items[k])}</b> {classes[k].unit === 'kg' ? 'kg' : 'L'} {classes[k].label.toLowerCase()} </span>
-  ))
+  const classes = net.classes
+  const byPost = deferred.reduce((a, d) => ({ ...a, [d.post]: (a[d.post] || 0) + d.kg }), {})
   return (
-    <div className="scroll">
-      {unmet.length > 0 && (
-        <div className="callout crit"><b>Unmet before runout:</b> {unmet.map((u) => `${u.post} ${u.cls} ${num(u.kg)} kg`).join(' · ')}. No transport mode can land it in time: escalate for additional lift.</div>
-      )}
-      {deferred.length > 0 && (
-        <div className="callout warn"><b>Winter air-maintenance liability: {num(totals.deferred_kg / 1000, 1)} t (≈ {lakh(totals.deferred_cost / 1e5)} by helicopter).</b>{' '}
-          Stocking that can no longer move by road: {Object.entries(deferred.reduce((a, d) => ({ ...a, [d.post]: (a[d.post] || 0) + d.kg }), {}))
-            .map(([p, kg]) => `${p} ${num(kg / 1000, 1)} t`).join(' · ')}.</div>
-      )}
-      {trips.length === 0 ? <div className="empty">No lifts planned.</div> : (
-        <table className="grid">
-          <thead><tr>
-            <th>Lift</th><th>Route</th><th>Load</th><th>Contents</th><th>Depart</th><th>Latest dispatch</th><th>Arrives</th><th className="r">Cost</th>
-          </tr></thead>
-          <tbody>
-            {trips.map((t) => (
-              <tr key={t.vehicle} className={`click ${trip === t.vehicle ? 'sel' : ''}`} onClick={() => onTrip(trip === t.vehicle ? null : t.vehicle)}>
-                <td><span className="mode-chip"><i style={{ background: MODES[t.mode].color }} />{MODES[t.mode].short}</span><br /><span className="mono">{t.vehicle}</span></td>
-                <td>{NAME[t.origin]}{t.passes.map((p) => <span key={p}> → <span className="ink2">{PASS[p]}</span></span>)}
-                  {t.stops.map((s) => <span key={s.post}> → <b>{s.post}</b>{s.mule && <span className="muted"> +mule</span>}</span>)}
-                  <div className="muted mono">{num(t.km)} km</div></td>
-                <td className="mono"><span className="loadbar"><i style={{ width: `${(t.load_kg / t.capacity_kg) * 100}%` }} /></span>
-                  {Math.round((t.load_kg / t.capacity_kg) * 100)}%<div className="muted">{num(t.load_kg)} / {num(t.capacity_kg)} kg</div></td>
-                <td className="items">{t.stops.map((s) => <div key={s.post}>{t.stops.length > 1 && <span className="muted">{s.post}: </span>}{items(s)}</div>)}</td>
-                <td className="mono">{hourLabel(demo, t.depart_h)}</td>
-                <td><span className="deadline">{hourLabel(demo, t.depart_by_h)}</span></td>
-                <td className="mono">{t.stops.map((s) => <div key={s.post}>{hourLabel(demo, s.arrive_h)}</div>)}</td>
-                <td className="r mono">{lakh(t.cost / 1e5)}</td>
-              </tr>
-            ))}
-            <tr>
-              <td colSpan={7} className="muted">{trips.length} lifts · {num(trips.reduce((a, t) => a + t.load_kg, 0) / 1000, 1)} t · solved with OR-Tools ({state.plan.nodes} nodes)</td>
-              <td className="r mono"><b>{lakh(totals.cost / 1e5)}</b></td>
-            </tr>
-          </tbody>
-        </table>
-      )}
+    <div className="plan">
+      <div className="card side">
+        <div className="card-h"><h2>What to send, and by when</h2>
+          <span className="r">{trips.length} lift{trips.length === 1 ? '' : 's'} · {tonnes(trips.reduce((a, t) => a + t.load_kg, 0))} · {lakh(totals.cost / 1e5)}</span></div>
+        <div className="scroll card-b">
+          {unmet.length > 0 && <div className="callout crit"><b>Cannot reach in time:</b> {unmet.map((u) => `${u.post} ${u.cls} (${tonnes(u.kg)})`).join(', ')}.
+            No transport can land it before it runs out. Escalate for extra airlift.</div>}
+          {deferred.length > 0 && <div className="callout warn"><b>{tonnes(totals.deferred_kg)} must be flown in later</b> (about {lakh(totals.deferred_cost / 1e5)} by helicopter):
+            winter stock that can no longer go by road. {Object.entries(byPost).map(([p, kg]) => `${p} ${tonnes(kg)}`).join(', ')}.</div>}
+          {trips.length === 0 && <div className="empty">Nothing needs to move. Every post is stocked to its target.</div>}
+          {trips.map((t) => (
+            <button key={t.vehicle} className={`lift ${focus === t.vehicle ? 'sel' : ''}`} onClick={() => setFocus(focus === t.vehicle ? null : t.vehicle)}>
+              <div className="h">
+                <span className="mode"><i style={{ background: MODES[t.mode].color }} />{MODES[t.mode].short}</span>
+                <b>{t.vehicle}</b>
+                <span className="cost">{lakh(t.cost / 1e5)}</span>
+              </div>
+              <div className="route">
+                {PLACE[t.origin]}{t.passes.map((p) => <span key={p}> → {PASS[p]}</span>)}
+                {t.stops.map((s) => <span key={s.post}> → <b>{s.post[0] + s.post.slice(1).toLowerCase()}</b>{s.mule && ' (then mule)'}</span>)}
+              </div>
+              <div className="grid">
+                <div><div className="k">Must leave by</div><div className="deadline">{hourLabel(demo, t.depart_by_h)}</div></div>
+                <div><div className="k">Arrives</div><div>{t.stops.map((s) => hourLabel(demo, s.arrive_h)).join(', ')}</div></div>
+                <div style={{ gridColumn: '1 / -1' }}><div className="k">Carries</div>
+                  {t.stops.map((s) => (
+                    <div key={s.post}>{t.stops.length > 1 && <span className="muted">{s.post[0] + s.post.slice(1).toLowerCase()}: </span>}
+                      {CLASS_ORDER.filter((k) => s.items[k]).map((k) => `${num(s.items[k])} ${classes[k].unit} ${classes[k].label.toLowerCase()}`).join(', ')}</div>
+                  ))}
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}><div className="k">Load {num(t.load_kg)} of {num(t.capacity_kg)} kg · {num(t.km)} km</div>
+                  <div className="loadbar"><i style={{ width: `${(t.load_kg / t.capacity_kg) * 100}%` }} /></div></div>
+              </div>
+            </button>
+          ))}
+          {trips.length > 0 && <div className="note">Planned with Google OR-Tools across trucks (with mule legs), helicopters and airdrops,
+            respecting payloads, pass closures and flying weather ({state.plan.nodes} decision points).
+            Click a lift to see its route. Click a post on the map to open it.</div>}
+        </div>
+      </div>
+      <div className="map-card card">
+        <MapView net={net} state={state} post={null} onPost={onPost} trips={trips} focus={focus} />
+      </div>
     </div>
   )
 }
