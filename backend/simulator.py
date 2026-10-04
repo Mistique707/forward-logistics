@@ -61,6 +61,12 @@ def real_closures():
     return list(zip(r.winter, r.closed_on, r.reopened_on))
 
 
+@functools.cache
+def real_closure_notes():
+    r = pd.read_csv(REAL_CLOSURES)
+    return {w: (n, s) for w, n, s in zip(r.winter, r.note, r.source)}
+
+
 def zojila_rule(w, closed=False):
     """Open/closed per day from snowfall and temperature (w: date-indexed weather), fitted to BRO's record."""
     s3 = w.snow_cm.rolling(3, min_periods=1).sum().to_numpy()
@@ -117,7 +123,8 @@ def closure_validation():
         pc, pr = zojila_season(closed.year if closed.month >= 10 else closed.year - 1)
         rows.append({"winter": winter, "real_close": closed.date().isoformat(), "rule_close": pc.date().isoformat(),
                      "close_err_days": (pc - closed).days, "real_reopen": reopened.date().isoformat(),
-                     "rule_reopen": pr.date().isoformat(), "reopen_err_days": (pr - reopened).days})
+                     "rule_reopen": pr.date().isoformat(), "reopen_err_days": (pr - reopened).days,
+                     "note": real_closure_notes()[winter][0], "source": real_closure_notes()[winter][1]})
     return rows
 
 

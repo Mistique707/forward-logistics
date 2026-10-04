@@ -265,7 +265,7 @@ def _alerts(state):
                 # the road window shutting before the runout is the winter-stocking danger
                 sev = "critical" if r is not None and (r <= 3 or (cd is not None and cd < r)) else "high"
             alerts.append({"severity": sev, "post": p, "cls": cls, "days": r,
-                           "title": f"{post['name']} {when}",
+                           "title": f"{post['name']} {when}", "context": pass_txt, "action": action,
                            "text": f"{post['name']} {when}; {pass_txt}; {action}."})
         backlog = [(cls, c) for cls, c in post["classes"].items() if c["shortfall"] - c["urgent"] > 0
                    and (c["shortfall"] - c["urgent"]) * CLASSES[cls]["kg"] >= 50]
@@ -284,6 +284,7 @@ def _alerts(state):
                 sev = "warning"
             alerts.append({"severity": sev, "post": p, "cls": None, "days": post["worst_days"],
                            "title": f"{post['name']}: {kg / 1000:.1f} t short of winter target",
+                           "context": f"{names}; {pass_txt}", "action": action,
                            "text": f"{post['name']} is {kg / 1000:.1f} t short of its winter target ({names}); "
                                    f"{pass_txt}; {action}."})
     alerts.sort(key=lambda a: (SEVERITY[a["severity"]], a["days"] if a["days"] is not None else 999))
