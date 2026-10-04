@@ -1,316 +1,221 @@
-# Forward Logistics: Design
+# Forward Logistics: Design (v2)
 
 SIH 2026, PS 26251: Predictive Logistics & Forward Supply Chain.
 
 The product answers one question for every forward post: **when will it run out of each supply
 class, can we still reach it in time, and what should we send, by which route and transport?**
 
-The demo story is **Advance Winter Stocking**. Posts beyond Zojila Pass must be stocked before
-the pass closes for winter. The headline alert reads: *"Post Alpha runs out of kerosene in 9
-days; Zojila closes in 6; dispatch N trucks by <day>."* The truck count and the day come from
-the plan.
+## Revision 2: what changed after the team meeting
 
-All data is synthetic. The terrain, roads, passes and weather are real open data for Ladakh.
-Post and depot names are fictional, and post coordinates are generic high-altitude terrain
-points. Nothing here represents a real deployment.
+| Meeting point | What was built |
+|---|---|
+| Merge Sujal's gradient-boosting model with ours | One combined model (section 4). It keeps our weather drivers and adds Sujal's 14–28-day usage lags, log target and P90 model. A benchmark shows the combined model against both parents and three naive rules. |
+| Use actual data instead of synthetic | Every input that can be real now is (section 2): BRO's Zoji La closures, PPAC regional fuel sales and the DRDO ration scale, on top of the real weather and roads. Post-level daily usage has no public source, so it stays simulated from these anchors and is replaced by real inventory records. |
+| A local, region-specific consumption model | A shared model plus a per-site correction layer learned from each site's own records (section 5). The regional evidence is that Ladakh uses 3.9× the all-India petroleum per person. |
+| Check Vastav's project | Reviewed: live weather, OSRM candidate routes, a route-risk classifier on synthetic labels, and a safety-stock dispatch layer. Its demand model was validated on a random split, which leaks future data. Adopted: live Open-Meteo weather for real sites. |
+| Get the inventory check ready | The `/field/` PWA records stock counts, receipts and issues, registers live sites, queues offline and syncs in batches (section 8). |
+| The model trains itself from inventory records | Learning loop (section 5): usage is derived from records, the per-site factor updates instantly, and the shared model retrains champion/challenger, judged on data it has never seen. |
+| The UI is cluttered | Light theme, five focused views and plain-language summaries (section 8). |
 
 ---
 
 ## 1. Theatre and data model
 
-### Network (fixed, defined in code)
-
 | Type | Name (fictional) | Placed near | Role |
 |---|---|---|---|
-| Base depot | SAPPHIRE | Srinagar valley, ~1,600 m | Source of all stock. Truck fleet and airdrop airfield. |
-| Intermediate depot | KESTREL | Kargil side, beyond Zojila | Roadhead for the Kargil sector, mule trains |
-| Intermediate depot | ONYX | Leh side | Airhead (helicopters), roadhead |
-| Forward posts | Alpha … Hotel (8) | Drass / Kargil / Nubra / Chang La ridges, 3,600–5,000 m | Consumers |
-| Passes | Zojila, Khardung La, Chang La | real OSM nodes | Closure points |
+| Base depot | SAPPHIRE | Srinagar valley, ~1,600 m | Source of road stock, truck fleet, airdrop airfield |
+| Depot | KESTREL | Kargil side | Roadhead |
+| Airhead | ONYX | Leh side | Helicopters, unlimited air reserve |
+| Forward posts | Alpha … Hotel (8) | Drass / Kargil / Nubra / Changthang ridges, 3,250–5,200 m | Consumers |
+| Passes | Zoji La, Khardung La, Chang La | real OSM nodes | Closure points |
 
-Each post has an altitude (from the DEM), a troop strength, and an `access` value: `road` (a
-truck reaches the post) or `track` (a truck reaches the roadhead, then mules or porters carry
-the last leg). The Zojila route closes for the whole winter. Khardung La and Chang La are kept
-open, but they close for 1–3 days after heavy snow.
+There are five supply classes: rations (kg), kerosene (L), diesel (L), ammunition (kg) and medical (kg).
 
-### Supply classes
+**SQLite tables:**
+- `daily`: the issue register of the demo posts, with troops, tempo, consumed, received and stock per day.
+- `inventory(site_id, cls, kind, quantity, observed_at, source)`: every count, receipt and issue, from the field
+  app, a sensor or the simulator. Current stock is the latest count plus later receipts minus later issues.
+- `sites`: live sites registered for real data collection, with location, altitude and headcount.
+- `pass_status`, `events`, `meta`.
 
-| Class | Unit | kg/unit | Main driver |
+Models live in `models/vN/` with `models/registry.json`, which records the active version, each version's
+evaluation and whether it was promoted.
+
+**Why SQLite:** all spatial work (OSM shortest paths, pass crossings) runs once and is cached as JSON. Nothing
+queries geometry at runtime, so PostGIS would add a server for no gain.
+
+## 2. Real data
+
+| Input | Source | File | Role |
 |---|---|---|---|
-| Rations | kg | 1.0 | troops, cold, altitude |
-| Kerosene (POL) | L | 0.8 | cold (heating degree-days), altitude |
-| Diesel (POL) | L | 0.84 | generators: cold, troops |
-| Ammunition | kg | 1.0 | operational tempo |
-| Medical | kg | 1.0 | troops, altitude, cold |
+| Daily weather, Oct 2020 – Apr 2026, every post and pass | Open-Meteo archive (ERA5) | `data/weather.csv` | Consumption drivers, flying limits, pass forecast |
+| Roads and passes | OpenStreetMap via Overpass, Copernicus 90 m DEM | `data/network.json` | Routing, risk |
+| Zoji La closures and reopenings, 2020-21 to 2024-25 | BRO reports in the press (links in the file) | `data/real/zojila_closures.csv` | History, rule fitting and validation |
+| State/UT fuel sales 2008-26 (all products, petrol, diesel) | PPAC | `data/real/ppac_statewise.csv` | Regional context, per-person comparison |
+| High-altitude ration: 4,088 kcal/man/day (~1.57 kg) | DRDO, *Defence Science Journal* | `config.py` | Ration level |
+| Weather at live sites | Open-Meteo forecast API (past 92 days + 16 ahead) | fetched at runtime | Drivers for real sites |
 
-### SQLite tables
+**Zoji La rule** (`simulator.zojila_rule`), fitted to the real record:
+- **Closure:** the first day on or after 31 Dec when 3-day snowfall reaches **20 cm**. Since 2020 BRO keeps the
+  pass open through December.
+- **Reopening:** when the 14-day mean temperature passes **−7 °C**, at least **21 days** after closure.
+- **Fit:** on the five winters, closing dates are 2.8 days off on average and reopenings 8.2 days. In 2025-26 BRO
+  held the pass open through heavier January snow, so the threshold is a policy setting.
+- **How it is used:** history uses the real closures, and forecasts use the rule.
 
-- `nodes(id, name, type, lat, lon, alt_m, access, roadhead_id, sector)`
-- `weather(node_id, date, t_mean, t_min, snowfall_cm, gust_kmh, cloud_pct)`: real Open-Meteo archive data
-- `pass_status(pass_id, date, open)`
-- `daily(post_id, date, troops, tempo, cls, consumed, stock)`: the simulator's output and the training data
-- `stock_reports(id, post_id, cls, quantity, observed_at, source)`: **generic ingest**. The
-  simulator, the field app and any future IoT sensor all write here, and current stock is
-  the latest report.
-- Route geometry, the distance and time matrix, and route risk are cached as JSON in `data/`, not in the DB.
+## 3. Simulator (`simulator.py`)
 
-**Why SQLite rather than Postgres/PostGIS:** there are about 15 nodes and a few dozen route
-polylines. All the spatial work (shortest paths on the OSM graph, nearest road node, pass
-crossings) runs once in Python with networkx, and the results are cached. Nothing queries
-geometry at runtime, so PostGIS would add a server and Docker and gain nothing. SQLite is one
-file, ships in Python's standard library, and works offline.
+- **Period and seed:** daily, 2021-01-01 to the demo date, on the real weather, with fixed seed 26251.
+- **Drivers:**
+  - Troops rotate every 90 days (±15%), with occasional surges.
+  - Tempo is a 3-state Markov chain per sector.
+- **Consumption** is troops × per-capita rate × lognormal noise (σ 0.12) × a **hidden local habit** per post and
+  class (σ 0.1; Bravo kerosene ×1.3, Hotel diesel ×1.25). The habits are what each post's own records reveal.
+  The per-capita rates:
+  - **Rations:** 1.57 kg at the published high-altitude scale (0.87× of that below 2,700 m) × (1 + 1% per °C
+    below 0).
+  - **Kerosene:** 0.05 L cooking + 0.03 L per heating degree-day, with an altitude uplift.
+  - **Diesel:** 0.25 L + 0.012 L per heating degree-day.
+  - **Ammunition:** 0.04 kg × tempo², plus incident spikes.
+  - **Medical:** 0.015 kg, rising with altitude and cold.
 
----
+  The kerosene and diesel norms are assumptions.
+- **Stock** follows three regimes:
+  - Open season: reorder-point convoys.
+  - **Advance Winter Stocking (Jun–Oct):** weekly convoys toward a target covering 1 Nov to the planned reopening
+    + 21 days, +10%. The planned reopening is the mean of the real reopenings on record.
+  - Winter: helicopter air maintenance.
+- **Demo date: Thu 20 Feb 2025**, six days before the rule's forecast closure (26 Feb; the real closure was
+  28 Feb). Two scripted events:
+  - An avalanche at Post Alpha on 8 Feb damages the kerosene store and blocks the mule track until 19 Feb. The loss
+    is set so Alpha holds about 9 days of kerosene.
+  - Foxtrot received 60% of its winter diesel.
 
-## 2. Open data (fetched once, cached in the repo)
+## 4. Demand model (`forecast.py`)
 
-`python -m backend.fetch_data` downloads the data and builds `data/network.json`. The results
-(`weather.csv`, `network.json`, plus a 2 MB gzipped OSM extract) are committed so the demo
-runs offline.
+- **Combined model, one per class:**
+  - LightGBM on log per-capita daily use, with a smearing bias correction.
+  - Features: t_mean, t_min, snowfall, heating degree-days, altitude, tempo, season, troops and day of week, plus
+    **lags** of per-capita use at 14, 21 and 28 days and the means of days 14–20 and 14–41 back.
+  - A **P90 quantile model** (alpha 0.92 for calibration) supplies the high-use forecast.
+- **Cold start:** lags are hidden on 30% of training rows, so the same model serves a site with no history.
+- **Forecasting:** days 1–16 use the weather feed (replayed from the archive in the demo), then climatology.
+  Beyond 14 days the forecast runs recursively in 14-day blocks on its own predictions.
+- **Benchmark:** held-out year before the demo date, horizons 1–14, drivers frozen at the origin. It reports
+  WAPE, MAE, MAPE and bias for:
+  - our v1 (drivers only)
+  - Sujal's recipe (his features, total-demand log target, 24 leaves, 400 rounds)
+  - the combined model
+  - three naive rules: trailing 7-day mean, value 14 days ago, 28-day mean
 
-- **Roads and passes:** an Overpass query for `highway=trunk|primary|secondary|tertiary` and
-  `mountain_pass=yes` in a Ladakh/Kashmir bounding box. The query keeps only the ways the route
-  graph needs.
-- **Weather:** the Open-Meteo archive, daily values for each node from Oct 2020 to Mar 2026.
-- **Elevation:** the Open-Meteo elevation API (Copernicus 90 m DEM, SRTM-class) for nodes and
-  sampled route points.
-- **Map tiles:** Esri dark hillshade, loaded live. This is the only part that needs internet;
-  without tiles, the vector layers still render. CARTO's label tiles now require an API key,
-  so the dashboard draws its own town labels instead.
+  It is run with archived weather and with climatology only. The combined model matches the better parent in
+  every class and beats the naive rules in both settings. P90 coverage is 84–89%.
+- **Explainability:** gain importance per class. Per-post SHAP (`pred_contrib`) is reported as % change in use.
 
----
+## 5. Learning loop (`learning.py`)
 
-## 3. Synthetic data simulator (`simulator.py`)
+1. **Usage from inventory records.**
+   - Issues count directly.
+   - Between two counts, the unexplained use (count₁ + receipts − issues − count₂) is spread over the days in
+     between.
+   - Demo posts use their issue register; live sites use their records, with real local weather.
+2. **Per-site correction factor.**
+   - `k = (n·r + 14) / (n + 14)`, where r is observed ÷ forecast over the last 28 days and n is the number of days
+     with records.
+   - It is recomputed whenever the inventory changes and applied to that site's forecasts.
+   - Leave-one-post-out test, new site → after 14 days of checks: kerosene 18.0% → 11.7%, diesel 17.8% → 12.7%,
+     rations 14.0% → 11.2% (WAPE).
+3. **Retraining (champion/challenger).**
+   - It is triggered at 28 new site-days, or by hand.
+   - Live records the champion has never seen are split in time. The challenger trains on everything up to the
+     split, and both forecast the later half.
+   - Promotion needs challenger WAPE ≤ champion × 1.02. On promotion a final model is trained on all data.
+   - At least 14 new days are required. Live rows weigh 3× the simulated history.
+   - Every version is kept in the registry.
 
-The simulator runs daily from 2021-01-01 to the demo date. It uses the real weather for each
-node and a fixed seed (`SEED=26251`).
+## 6. Planner (`network.py`, `planner.py`)
 
-- **Troops:** each post has a base strength of 30–150. A rotation every 90 days changes it by
-  ±15%. There are occasional surges.
-- **Operational tempo:** a 3-state Markov chain per sector (quiet / elevated / high), with
-  sticky transitions.
-- **Consumption per day** = troops × per-capita rate × lognormal noise (σ≈0.12):
-  - rations: 1.4 kg × (1 + 0.15·[alt>3000 m]) × (1 + 0.01·max(0, −t_mean))
-  - kerosene: 0.05 L for cooking + 0.03 L × HDD × (1 + 0.1·(alt−3000)/1000), where
-    HDD = max(0, 15 − t_mean). The cooking base keeps MAPE defined in summer.
-  - diesel: 0.25 L + 0.012 L × HDD
-  - ammunition: 0.04 kg × tempo² (tempo 1/2/3), plus rare firing-incident spikes
-  - medical: 0.015 kg × (1 + 0.2·(alt−3000)/1000 + 0.01·max(0, −t_min))
-- **Pass status:** Zojila closes on the first day after 1 Nov when the 3-day snowfall is
-  **S = 15 cm** or more, and on 31 Dec at the latest. It reopens on the first day after 15 Mar
-  when the 14-day mean temperature exceeds 0 °C. The value of S was pinned against the real
-  ERA5 snowfall at the pass. It gives closures of 14 Nov 2020, 6 Nov 2022, 28 Dec 2024 and
-  21 Dec 2025; in 2021 and 2023 nothing triggered, so the pass closed on 31 Dec. Reopenings
-  fall between late April and May. Khardung La and Chang La close on any day with 10 cm or
-  more of snow, plus the next day, or the next 2 days if snowfall reaches 20 cm.
-- **Stock** follows three resupply regimes:
-  - Open season: a reorder-point convoy goes out when stock plus pipeline falls below
-    20 days, and fills to 45 days after a 3-day lead time.
-  - **Advance Winter Stocking (1 Jun – 31 Oct):** weekly convoys build each post linearly
-    toward its winter target. The target is the expected use from 1 Nov to the
-    climatological reopening, plus 10%, at planning-norm tempo 2. By the closure, most posts
-    sit near target.
-  - Winter (road closed): helicopter air maintenance when stock falls below 15 days.
-  Daily stock goes into `daily`, and the latest snapshot goes into `stock_reports`.
-- **Demo date: 15 Dec 2025**, 6 days before the simulated Zojila closure on 21 Dec. Two
-  shortfalls are injected:
-  - A landslide cut the Drass–Alpha track on 1 Oct, so Post Alpha missed its October
-    convoys. The track is reported clear on 14 Dec. Alpha's season kerosene receipts are
-    scaled so that it holds about 9 days of kerosene, and its other classes hold about 110–130
-    days against the roughly 140 days needed.
-  - Foxtrot received only 60% of its winter-stocking diesel.
-  Everything else is near target. Everything is deterministic.
+The OR-Tools routing model is unchanged from v1:
+- **Mode choice:** a disjunction per demand chunk picks truck (+ mule leg), helicopter or airdrop.
+- **Fleet:** heterogeneous capacities (helicopter derated with altitude, airdrop 10% loss), with one vehicle per
+  air sortie per day.
+- **Time windows:**
+  - A seasonal closure caps truck arrival.
+  - Transient closures and weather no-go days are removed from the windows.
+- **Search:** two deterministic first-solution strategies with greedy descent, a 5 s hard cap, at most 300 nodes.
 
----
+Demand changes in v2:
+- **Urgent demand** is planned on the **P90** forecast for the next three weeks, which gives safety stock.
+- **Stocking demand** covers the mean forecast to the predicted reopening + 7 days. Stocking that misses the road
+  window becomes the winter air-maintenance liability.
 
-## 4. Demand forecasting (`forecast.py`)
+## 7. What-if (`scenarios.py`)
 
-- **Model:** one LightGBM regressor per supply class. It predicts **per-capita daily
-  consumption**, which is multiplied by troop strength. This lets a troop surge extrapolate
-  correctly, where a tree model cannot extrapolate raw totals.
-- **Features:** t_mean, t_min, snowfall, HDD, altitude, tempo, day-of-year (sin/cos) and troops.
-- **Future drivers:** days 1–16 use the weather forecast. In the demo this is replayed from the
-  cached archive, the way the Open-Meteo forecast API would supply it in production. Days 17+
-  use climatology, the multi-year day-of-year mean. Troops and tempo use the current values or
-  the scenario overrides.
-- **Days of stock remaining:** the first day on which cumulative forecast consumption exceeds
-  current stock. The result is a runout date for each post and class.
-- **Validation:** a time-based holdout (Oct 2024–Sep 2025, which includes a full winter). The
-  report gives MAE and MAPE per class against a **naive baseline**: the trailing 7-day mean,
-  lagged by the forecast horizon (1–14 days). Troops and tempo are frozen at the forecast
-  origin. The metrics are reported **twice**:
-  - with the archived weather as the "forecast" (an upper bound, because it is a perfect
-    forecast)
-  - with **climatology-only** future weather (a lower bound, with no weather forecast at all)
-  The model has to beat the baseline in both.
-- **Explainability:** global gain-based feature importance per class. For each post, LightGBM's
-  built-in SHAP contributions (`pred_contrib=True`) explain why the forecast is what it is.
-  No extra dependency is needed.
+- **Overrides:** closure shift, **reopening shift (new)**, troop surge, helicopter grounding, cold snap, sector
+  tempo.
+- **Presets:** today · **What really happened in 2025** (closure +2 days, reopening +13: the real 28 Feb / 1 Apr) ·
+  closes 4 days early · closes 10 days early · pass shut + helicopters grounded · Bravo surge · cold snap · Nubra
+  tempo.
+- **Performance:** the baseline and presets are precomputed at startup (~6 s), and a custom scenario takes ~1 s.
 
----
+## 8. UI
 
-## 5. Route and load planner (`network.py`, `planner.py`)
+Light theme in IBM Plex, with status shown as a pill (colour + word) and five views:
 
-### Road graph
+1. **Overview:**
+   - *What needs action* cards: title, context and the action to take.
+   - All posts with status.
+   - A quiet map where only risky roads are coloured.
+   - The post detail: a plain summary, days of stock against the winter target, a stock chart (recorded / if
+     nothing is sent / with this plan) and the SHAP "why".
+2. **Dispatch plan:** one card per lift (route, must-leave-by, arrival, contents, load) and a map of the selected
+   lift.
+3. **What-if:** a scenario list (the real event is marked), a custom builder and before/after cards.
+4. **Forecast & learning:**
+   - the loop diagram
+   - the new-site evaluation
+   - retraining with its version history
+   - the accuracy table: naive / ours / Sujal's / combined
+   - drivers
+   - per-site factors
+   - live sites
+5. **Data sources:** real closures against the rule, PPAC charts, the real inputs and what is still simulated.
 
-An undirected networkx graph is built from the OSM ways, with edge lengths from haversine
-distance. The graph gives all-pairs shortest paths between the base depot, the intermediate
-depots and each post's roadhead. Each path keeps its polyline, length, max altitude,
-cumulative climb and the passes it crosses (those within 2 km of a pass node). A track post's
-last leg runs from its roadhead to the post: straight-line distance × 1.6, with a climb
-penalty.
+**Inventory check (`/field/`):**
+- Site picker covering live sites and demo posts.
+- Stock count, Received and Issued modes.
+- Register a live site (location from the device or typed in).
+- Offline queue with a drill switch, and batch sync to `/api/inventory`.
+- Demo-post records are stamped on the demo day; live-site records keep real timestamps.
 
-**Route risk** (0–1, shown as green, amber or red) is a weighted mix of three things: whether
-a pass on the route closes within the plan window, forecast snowfall along the route, and
-terrain severity (max altitude and climb).
+## 9. API
 
-### Transport modes (illustrative parameters, not real specifications)
+`/api/state` (GET preset, POST scenario) · `/api/series` · `/api/model` · `/api/data` · `/api/inventory`
+(POST batch / GET recent) · `/api/stock-reports` (counts only) · `/api/sites` (GET / POST) · `/api/learning`
+(GET) · `/api/learning/retrain` (POST). Inputs are validated with pydantic; unknown sites are rejected.
 
-| Mode | From | Payload | Speed | Weather / route limits |
-|---|---|---|---|---|
-| Truck | SAPPHIRE | 4,000 kg | 25 km/h | Blocked while a pass on the route is closed |
-| Mule / porter (last leg) | post's roadhead | 1,500 kg per train trip | 3 km/h + climb | Blocked on days with snowfall > 25 cm. Adds shuttle time on track posts. |
-| Helicopter | ONYX | 1,500 kg, derated with post altitude (~40% at 5,000 m) | 180 km/h | Grounded on gusts > 45 km/h, snow > 1 cm or cloud > 85% at the post |
-| Airdrop | SAPPHIRE | 5,000 kg, 10% loss | 400 km/h | No-go on gusts > 35 km/h or cloud > 70% |
+## 10. Running and tests
 
-Each mode also has a fixed cost per trip plus a cost per km. Air is roughly 10–30× the cost
-of road.
+`py -3.13 demo.py` sets up, rebuilds the history, trains, benchmarks, evaluates the local layer, builds the UI and
+serves on :8000.
 
-### OR-Tools formulation (one model, solved in a few seconds)
+`pytest` (15 checks) covers:
+- drivers and the published ration scale
+- the closure rule's error against the real record
+- the combined model beating both naive rules and its parents
+- P90 coverage
+- the per-site layer helping new sites
+- inventory usage arithmetic
+- factor shrinkage
+- planner capacity
+- the headline alert
+- pass closure changing the plan
+- grounding delaying the air lift
+- late reopening and a surge raising demand
 
-- **Demand:** for each post and class, shortfall = target stock − current stock. The target
-  covers stock until the next guaranteed road access, which for posts beyond Zojila means
-  until spring reopening, plus a 7-day safety buffer. Shortfalls fall into two kinds:
-  - *Urgent:* runout falls inside the 14-day window. These go in 500 kg chunks, with truck,
-    helicopter and airdrop options.
-  - *Stocking:* runout falls later. These go in 2,000 kg chunks with the truck option only.
-    Not sending one costs its later air-maintenance price, so the solver weighs a truck now
-    against air later, and anything it defers shows up as a "winter air-maintenance
-    liability".
-  Chunk sizes double until the model has **≤ 300 nodes**.
-- **Mode choice as disjunctions:** each chunk becomes one node per feasible mode (truck,
-  helicopter or airdrop). `AddDisjunction` with max cardinality 1 makes the solver deliver it
-  by exactly one mode, or drop it at a large penalty. Dropped chunks surface as **UNMET**
-  alerts.
-- `SetAllowedVehiclesForIndex` ties each mode node to that mode's vehicles.
-- **Heterogeneous fleet:** each vehicle has its own capacity, distance and time callbacks, and
-  fixed cost. Trucks are one convoy trip each. Helicopters and airdrop aircraft are modelled as
-  **one vehicle per sortie per day**, which is how "helicopter grounded for 3 days" removes
-  sorties.
-- **Time dimension** (hours, 14-day window). The upper bound of a chunk's window is its runout
-  time. For truck nodes the window is also capped at pass-closure time plus the leg after the
-  pass. Weather no-go days, and transient pass closures, are removed from arrival windows with
-  `CumulVar.RemoveInterval`. A track post's mule shuttle is added as service time.
-- **Capacity dimension** limits each vehicle to its payload.
-- **Search:** routes are open (no return leg).
-  - Each mode's fixed sortie cost sits on its first leg, so insertion heuristics see it.
-  - Two deterministic first-solution strategies, `PARALLEL_CHEAPEST_INSERTION` and
-    `ALL_UNPERFORMED`, are each improved by greedy descent, and the cheaper plan is kept.
-    Cheapest insertion alone can lock a chunk into the wrong mode.
-  - There is a **hard 5 s limit** in total. Each solve takes under 1 s in practice, so the
-    result is reproducible.
-- **Urgent loads** must land a day before their runout day.
-- **Latest dispatch** for each trip is the tightest stop window minus that stop's travel
-  offset.
-- **Output (dispatch plan):** one row per trip, giving mode, vehicle, origin, route (passes
-  crossed), stops with quantity by class, latest dispatch time, arrival time and cost. Totals
-  cover tonnage by mode, cost and unmet kg.
+## Simplifications
 
----
-
-## 6. What-if simulator (`scenarios.py`)
-
-A scenario is a small set of overrides on the baseline inputs:
-
-- `pass_shift_days`: e.g. Zojila closes 4 days early
-- `troop_surge`: a post and a percentage, e.g. Bravo +60%
-- `heli_grounded_days`: e.g. 3
-- `temp_offset_c` for N days: a cold snap
-- `tempo`: the tempo for a sector
-
-`compute_state(scenario)` re-runs forecast → runout → demand → VRP and returns the posts,
-alerts, plan and KPIs. **The baseline and every preset are computed once at startup and
-cached**, so presets switch instantly. A custom scenario is one live solve, under 5 s. The API returns the
-**before/after diff**: KPI deltas, runout-date changes per post, and plan changes (mode shifts,
-added or removed trips, cost, unmet kg). Five presets ship with the app, including the
-winter-stocking demo path.
-
----
-
-## 7. API (FastAPI)
-
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/api/network` | Nodes, passes and route GeoJSON with risk |
-| POST | `/api/state` | Body: a scenario (empty for the baseline). Returns posts, stock, runout, alerts, plan and KPIs, plus the diff against the baseline. |
-| POST | `/api/series` | Body: `{post_id, scenario}`. Returns history plus forecast per class, projected stock with and without the plan, and SHAP drivers. |
-| GET | `/api/model` | Validation metrics against the baseline, and feature importance |
-| GET | `/api/scenarios` | The preset scenarios |
-| POST | `/api/stock-reports` | Generic stock ingest, as a batch of `{post_id, cls, quantity, observed_at, source}`, for the field app now and IoT later. It invalidates the cached states. |
-| GET | `/api/stock-reports` | Recent non-simulator reports. The dashboard polls this and re-plans when a report arrives. |
-
-Auth is a trivial stub: an optional `X-Operator` header that is logged on ingest.
-
----
-
-## 8. UI (React + Vite + Leaflet + Recharts)
-
-The UI is one command-dashboard screen with a dark theme and a monospace data typeface.
-
-1. **Top bar:** the sector, a "SYNTHETIC DATA" tag, the simulated date, KPI tiles (posts at
-   risk, days to Zojila closure, tonnes to move, plan cost, unmet), and the active scenario chip.
-2. **Map (centre):** hillshade terrain. Depots are squares. Posts are circles coloured by worst
-   days of stock. Passes are triangles labelled open, closing in N days, or closed. Routes are
-   coloured by risk, and planned trips are highlighted as animated dashes.
-3. **Alerts (left):** one alert per urgent post and class, plus one winter-stock backlog alert
-   per post. An urgent alert is **critical** if the runout is ≤ 3 days, the plan cannot meet
-   it, or the road window closes before the runout. The truck count and the "dispatch by" day
-   come from the plan. Clicking an alert focuses the post.
-4. **Post panel (right):** a stock bar per class with days of stock. A forecast chart for each
-   class shows history, forecast and the stock depletion to runout. Below them is a "Why"
-   list of the top SHAP drivers.
-5. **Dispatch plan (bottom tab):** a trip table with load by class, depart-by and
-   arrive-by times, and totals by mode.
-6. **What-if (bottom tab):** preset buttons and controls (sliders and selects). A live re-plan
-   produces a before/after KPI comparison, runout deltas and a plan diff. The map shows the
-   scenario plan.
-7. **Model (bottom tab):** an MAE/MAPE table comparing the model with the naive baseline, and a
-   feature-importance chart.
-8. **Field client (`/field/`, built):** a mobile PWA, with a service-worker shell cache, that
-   queues reports in localStorage while offline and syncs them in one batch when back online.
-   It has a "simulate no signal" drill switch.
-
----
-
-## 9. Running, demo and tests
-
-- `py -3.13 demo.py` is the one command. It creates `.venv`, installs the requirements, builds
-  the frontend, seeds the DB, trains the models, and serves the API and built UI on
-  `http://localhost:8000`. Re-running it is idempotent and deterministic.
-- `pytest` runs four checks:
-  - The simulator responds to its drivers: kerosene rises with cold, and ammunition rises
-    with tempo.
-  - The forecast beats the naive baseline on MAE.
-  - The planner keeps every trip within its vehicle capacity.
-  - An early Zojila closure changes the plan, shifting load from road to air or unmet.
-
-## Repo layout
-
-```
-demo.py  requirements.txt  README.md
-backend/  fetch_data.py simulator.py network.py forecast.py planner.py scenarios.py api.py db.py config.py
-tests/    test_simulator.py test_forecast.py test_planner.py test_scenarios.py
-data/raw/ cached OSM / weather / elevation (committed)
-frontend/ Vite React app
-docs/design.md
-```
-
-## Explicit simplifications
-
-- All road stock originates at SAPPHIRE. **The ONYX air reserve is unlimited**: helicopter
-  sorties draw from it without depleting it. Replenishing the intermediate depots is out of
-  scope.
-- Multi-stop truck routes beyond a pass use a conservative arrival cap at every stop.
-- Each truck makes one convoy trip in the 14-day window. Return legs are ignored.
-- Weather limits are evaluated per day, not per hour.
-- The holdout and the demo both use archived weather as the "forecast".
+- Road stock originates only at SAPPHIRE, and the ONYX air reserve is unlimited.
+- Each truck makes one trip per 14-day window, with no return legs.
+- Multi-stop trucks use a conservative per-stop cap beyond a pass.
+- Weather limits are per day. Archived weather stands in for the 16-day forecast in the demo.

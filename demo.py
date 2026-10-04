@@ -63,7 +63,7 @@ def announce_when_ready(url, browser):
         except OSError:
             time.sleep(0.5)
             continue
-        print(f"\n  Dashboard ready:   {url}\n  Field report PWA:  {url}/field/\n", flush=True)
+        print(f"\n  Dashboard ready:   {url}\n  Inventory check:   {url}/field/\n", flush=True)
         if browser:
             webbrowser.open(url)
         return
@@ -82,7 +82,7 @@ def main():
     if not (DATA / "network.json").exists() or not (DATA / "weather.csv").exists():
         print("[2/5] fetching open data (OSM, Open-Meteo)", flush=True)
         sh(PY, "-m", "backend.fetch_data")
-    print("[2/5] seeding the synthetic history", flush=True)
+    print("[2/5] building the history (real weather, real Zoji La closures)", flush=True)
     from backend.simulator import simulate
     simulate()
     print("[3/5] training and validating the forecast models", flush=True)

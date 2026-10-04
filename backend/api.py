@@ -253,12 +253,14 @@ def post_retrain():
 if DIST.exists():
     app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
 
+    FRESH = {"Cache-Control": "no-cache"}  # pages and the service worker always revalidate; hashed assets may cache
+
     @app.get("/{path:path}")
     def spa(path: str):
         f = (DIST / path).resolve()
         if DIST.resolve() in f.parents:  # never serve outside dist
             if f.is_file():
-                return FileResponse(f)
-            if (f / "index.html").is_file():  # /field/ -> the field PWA
-                return FileResponse(f / "index.html")
-        return FileResponse(DIST / "index.html")
+                return FileResponse(f, headers=FRESH)
+            if (f / "index.html").is_file():  # /field/ -> the inventory-check PWA
+                return FileResponse(f / "index.html", headers=FRESH)
+        return FileResponse(DIST / "index.html", headers=FRESH)
