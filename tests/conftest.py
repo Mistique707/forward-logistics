@@ -9,6 +9,6 @@ def built():
     if not DB_PATH.exists():
         from backend.simulator import simulate
         simulate()
-    if not (MODELS / "metrics.json").exists():
+    if not (MODELS / "registry.json").exists() or not (MODELS / "learning_eval.json").exists():
         from backend.forecast import train_all
         train_all()
