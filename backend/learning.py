@@ -31,6 +31,7 @@ WINDOW = 28
 AUTO_RETRAIN_DAYS = 28   # newly observed site-days that trigger a retrain
 LIVE_WEIGHT = 3.0        # real observations count more than simulated history
 PROMOTE_TOLERANCE = 1.02
+MIN_EVAL_DAYS = 7      # the later half of the new data, used to judge the challenger
 EVAL_FILE = MODELS / "learning_eval.json"
 
 
@@ -206,16 +207,31 @@ def _wape(actual, pred):
 
 
 def retrain(note="manual"):
-    """Train a challenger on all observed usage; promote it if it is at least as good on the last 4 weeks."""
+    """Champion/challenger on data the champion has never seen.
+
+    The new live records are split in time: the challenger trains on everything up to the split, and both
+    models forecast the later half. If the challenger is at least as good, a final model is trained on all
+    the data and promoted; otherwise the challenger is kept on record and the champion keeps serving.
+    """
     with _lock:
         if _run["running"]:
             return False
         _run.update(running=True, error=None)
     try:
         df, n_live = _training_frame()
-        recent = df.index.isin(_window(df).index)
-        challenger = forecast.fit(df[~recent], weight="w")
-        test = df[recent].dropna(subset=["pc"]).reset_index(drop=True)
+        reg = forecast.registry()
+        champ = next(x for x in reg["versions"] if x["version"] == reg["active"])
+        live = df.post_id.str.startswith("LIVE-")
+        seen_until = champ.get("live_until")
+        new = live & (df.date > pd.Timestamp(seen_until)) if seen_until else live
+        new_dates = np.sort(df[new].date.unique())
+        if len(new_dates) < 2 * MIN_EVAL_DAYS:
+            _run["last"] = {"skipped": f"needs {2 * MIN_EVAL_DAYS} days of new live records "
+                                       f"(has {len(new_dates)})"}
+            return True
+        test_mask = new & (df.date >= new_dates[len(new_dates) // 2])
+        challenger = forecast.fit(df[~test_mask], weight="w")
+        test = df[test_mask].dropna(subset=["pc"]).reset_index(drop=True)
         champ_pred = _predict(test)
         chall_pred = np.empty(len(test))
         for cls, g in test.groupby("cls"):
@@ -223,13 +239,15 @@ def retrain(note="manual"):
             chall_pred[g.index] = np.exp(mean.predict(g[forecast.FEATURES])) * smear * g.troops
         ev = {cls: {"challenger": round(_wape(g.consumed, chall_pred[g.index]), 2),
                     "champion": round(_wape(g.consumed, champ_pred[g.index]), 2)} for cls, g in test.groupby("cls")}
-        better = (np.mean([v["challenger"] for v in ev.values()])
-                  <= np.mean([v["champion"] for v in ev.values()]) * PROMOTE_TOLERANCE)
+        better = bool(np.mean([v["challenger"] for v in ev.values()])
+                      <= np.mean([v["champion"] for v in ev.values()]) * PROMOTE_TOLERANCE)
         final = forecast.fit(df, weight="w") if better else challenger
         v = forecast.save_version(final, {"rows": int(len(df)), "live_rows": n_live, "note": note,
+                                          "live_until": str(df[live].date.max().date()) if better else seen_until,
                                           "eval": {c: e["challenger"] for c, e in ev.items()},
-                                          "champion_eval": {c: e["champion"] for c, e in ev.items()}}, promote=better)
-        _run["last"] = {"version": v, "promoted": bool(better)}
+                                          "champion_eval": {c: e["champion"] for c, e in ev.items()},
+                                          "eval_rows": int(len(test))}, promote=better)
+        _run["last"] = {"version": v, "promoted": better}
         from . import scenarios
         scenarios.invalidate()
         return True
