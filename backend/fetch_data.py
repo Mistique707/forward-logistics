@@ -20,6 +20,10 @@ from .config import BBOX, DATA, NODES, PASSES, WEATHER_END, WEATHER_START
 
 RAW_OSM = DATA / "raw_osm_roads.json.gz"
 WEATHER_CSV = DATA / "weather.csv"
+PPAC_CSV = DATA / "real" / "ppac_statewise.csv"
+PPAC_XLSX = "https://ppac.gov.in/uploads/page-images/1787137273_Statewise_Sales-POL_Consumption_Final.xlsx"
+PPAC_STATES = ["LADAKH", "JAMMU & KASHMIR", "HIMACHAL PRADESH", "UTTARAKHAND", "SIKKIM", "ARUNACHAL PRADESH",
+               "ALL INDIA TOTAL"]
 OVERPASS = [
     "https://overpass-api.de/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
@@ -81,6 +85,22 @@ def fetch_weather():
     pd.concat(frames).round(2).to_csv(WEATHER_CSV, index=False)
 
 
+def fetch_ppac():
+    """PPAC annual state/UT sales of petroleum products ('000 t): all products, petrol (MS), diesel (HSD)."""
+    import io
+    book = io.BytesIO(_get(PPAC_XLSX))
+    rows = []
+    for sheet, product in (("PT_Cons_Statewise", "all"), ("PT_Cons_Statewise MS", "petrol"),
+                           ("PT_Cons_Statewise HSD", "diesel")):
+        df = pd.read_excel(book, sheet, header=None)
+        years = df.iloc[7, 1:].tolist()
+        for _, r in df[df[0].isin(PPAC_STATES)].iterrows():
+            rows += [(r[0].title(), product, fy, round(float(v), 2)) for fy, v in zip(years, r[1:]) if pd.notna(v)]
+    PPAC_CSV.parent.mkdir(exist_ok=True)
+    pd.DataFrame(rows, columns=["state", "product", "fiscal_year", "kt"]).to_csv(PPAC_CSV, index=False)
+    print(f"ppac: {len(rows)} rows")
+
+
 def elevation(points):
     """Elevations (m) for [(lat, lon), ...], 100 per request."""
     out = []
@@ -99,4 +119,6 @@ if __name__ == "__main__":
         fetch_osm()
     if not WEATHER_CSV.exists():
         fetch_weather()
+    if not PPAC_CSV.exists():
+        fetch_ppac()
     network.build()

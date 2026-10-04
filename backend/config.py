@@ -35,10 +35,24 @@ PASSES = {
     "KHARDUNG": {"name": "Khardung La", "lat": 34.2787, "lon": 77.6047, "alt_m": 5359, "seasonal": False},
     "CHANG": {"name": "Chang La", "lat": 34.0472, "lon": 77.9304, "alt_m": 5383, "seasonal": False},
 }
-ZOJILA_CLOSE_SNOW_3D_CM = 15.0   # closes on first day after 1 Nov when 3-day snowfall >= this
-ZOJILA_LATEST_CLOSE = (12, 31)   # ...or on 31 Dec at the latest
-ZOJILA_REOPEN_TEMP_C = 0.0       # reopens first day after 15 Mar when 14-day mean temp > this
+# Zoji La closure rule, fitted to the real BRO closure/reopening dates in data/real/zojila_closures.csv
+# (2020-21 to 2024-25: closure MAE 2.8 days, reopening MAE 8 days on ERA5 weather). Since 2020 BRO keeps
+# the pass open through December, so the winter closure is the first heavy snow from 31 Dec onwards.
+ZOJILA_EARLIEST_CLOSE = (12, 31)
+ZOJILA_CLOSE_SNOW_3D_CM = 20.0   # closes when 3-day snowfall at the pass reaches this
+ZOJILA_REOPEN_TEMP_C = -7.0      # reopens when the 14-day mean temperature rises above this...
+ZOJILA_MIN_CLOSED_DAYS = 21      # ...but not before three weeks of snow clearance
 TRANSIENT_CLOSE_SNOW_CM = 10.0   # Khardung / Chang close that day + 1 (+2 if >= 20 cm)
+
+# Published norm: the authorised high-altitude ration (2,700-4,500 m) gives 4,088 kcal per man per day
+# (Babusha & Singh, Defence Science Journal, DRDO). At ~2.6 kcal/g of mixed fresh + dry ration that is ~1.57 kg.
+HA_RATION_KCAL = 4088
+RATION_KCAL_PER_KG = 2600
+
+# Census 2011 population, used to put PPAC state/UT fuel sales on a per-capita footing
+POPULATION_2011 = {"Ladakh": 274289, "Jammu & Kashmir": 12267013, "Himachal Pradesh": 6864602,
+                   "Uttarakhand": 10086292, "Sikkim": 610577, "Arunachal Pradesh": 1383727,
+                   "All India Total": 1210854977}
 
 # Supply classes: unit, kg per unit, criticality weight (used for alert ranking and drop penalties)
 CLASSES = {
