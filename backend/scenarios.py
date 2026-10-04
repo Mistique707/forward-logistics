@@ -13,14 +13,17 @@ import threading
 import numpy as np
 import pandas as pd
 
-from . import forecast, network, planner
+from . import forecast, learning, network, planner
 from .config import (CLASSES, DB_PATH, FORECAST_DAYS, MODES, PASSES, PLAN_DAYS, POSTS, SAFETY_DAYS,
                      WEATHER_FORECAST_DAYS)
-from .simulator import climatology, transient_open, weather, zojila_open
+from .simulator import climatology, transient_open, weather, zojila_rule
 
 PRESETS = [
-    {"id": "baseline", "name": "Baseline", "desc": "Advance Winter Stocking, 6 days before Zoji La closes.",
-     "overrides": {}},
+    {"id": "baseline", "name": "Baseline",
+     "desc": "20 Feb 2025: a western disturbance is forecast to shut Zoji La in 6 days.", "overrides": {}},
+    {"id": "what_happened", "name": "What really happened in 2025",
+     "desc": "Zoji La actually shut on 28 Feb and reopened only on 1 Apr: two days later and 13 days later than "
+             "forecast.", "overrides": {"pass_shift_days": 2, "reopen_shift_days": 13}},
     {"id": "early_closure", "name": "Zoji La closes 4 days early",
      "desc": "Heavy snow brings the closure forward to day 2.", "overrides": {"pass_shift_days": -4}},
     {"id": "closed_now", "name": "Zoji La closes 10 days early",
@@ -49,6 +52,8 @@ def base_inputs():
         last = pd.read_sql("SELECT post_id, troops, tempo FROM daily WHERE cls='rations' AND date="
                            "(SELECT max(date) FROM daily)", con).set_index("post_id")
         events = pd.read_sql("SELECT * FROM events", con).to_dict("records")
+        hist = pd.read_sql("SELECT post_id, cls, consumed / troops AS pc FROM daily WHERE date > ? ORDER BY date",
+                           con, params=((demo - pd.Timedelta(days=60)).strftime("%Y-%m-%d"),))
     dates = pd.date_range(demo, periods=FORECAST_DAYS)
     clim = climatology(demo)
     wx = {}
@@ -57,15 +62,25 @@ def base_inputs():
         cl = clim[node].loc[dates[WEATHER_FORECAST_DAYS:].dayofyear].set_axis(dates[WEATHER_FORECAST_DAYS:])
         wx[node] = pd.concat([arch, cl])
     return {"demo": demo, "dates": dates, "troops": last.troops.to_dict(), "tempo": last.tempo.to_dict(),
-            "events": events, "wx": wx}
+            "events": events, "wx": wx,
+            "hist_pc": {(p, c): g.pc.to_numpy() for (p, c), g in hist.groupby(["post_id", "cls"])}}
 
 
 def current_stock():
+    """Latest count per site and class, plus receipts and minus issues recorded after it."""
     with sqlite3.connect(DB_PATH) as con:
-        r = pd.read_sql("SELECT post_id, cls, quantity FROM stock_reports s WHERE id = (SELECT id FROM stock_reports"
-                        " t WHERE t.post_id=s.post_id AND t.cls=s.cls ORDER BY observed_at DESC, id DESC LIMIT 1)",
-                        con)
-    return {(p, c): q for p, c, q in r.itertuples(index=False)}
+        ev = pd.read_sql("SELECT site_id, cls, kind, quantity, observed_at, id FROM inventory "
+                         "ORDER BY observed_at, id", con)
+    out = {}
+    for (site, cls), g in ev.groupby(["site_id", "cls"]):
+        counts = g[g.kind == "count"]
+        if counts.empty:
+            continue
+        last = counts.iloc[-1]
+        after = g[(g.observed_at > last.observed_at) | ((g.observed_at == last.observed_at) & (g.id > last.id))]
+        out[site, cls] = max(0.0, last.quantity + after[after.kind == "receipt"].quantity.sum()
+                             - after[after.kind == "issue"].quantity.sum())
+    return out
 
 
 def _drivers(ov):
@@ -100,12 +115,14 @@ def compute_state(ov):
     stock = current_stock()
 
     # passes: predicted Zojila closure / reopening, transient closures inside the plan window
-    zo = zojila_open(wx["ZOJILA"]).to_numpy()
+    zo = zojila_rule(wx["ZOJILA"]).to_numpy()
     close_day = _first(~zo)
     reopen_day = None if close_day is None else _first(zo[close_day:])
     reopen_day = None if reopen_day is None else close_day + reopen_day
     if close_day is not None:
         close_day = max(0, close_day + ov.get("pass_shift_days", 0))
+    if reopen_day is not None:
+        reopen_day = max((close_day or 0) + 1, reopen_day + ov.get("reopen_shift_days", 0))
     closures = {"ZOJILA": [(24 * close_day, 10 ** 6)] if close_day is not None and close_day < PLAN_DAYS else []}
     passes = [{"id": "ZOJILA", **PASSES["ZOJILA"], "close_day": close_day, "reopen_day": reopen_day,
                "status": "closed" if close_day == 0 else "closing" if close_day is not None and close_day < PLAN_DAYS
@@ -120,27 +137,38 @@ def compute_state(ov):
     cover = (reopen_day if reopen_day is not None else FORECAST_DAYS - SAFETY_DAYS) + SAFETY_DAYS
     cover = min(cover, FORECAST_DAYS) - 1
     posts, demands, fc = [], [], {}
+    X = {}
+    for p in POSTS:
+        x = wx[p][["t_mean", "t_min", "snow_cm"]].reset_index().rename(columns={"index": "date"})
+        X[p] = forecast.add_features(x.assign(alt_m=net[p]["alt_m"], tempo=tempo[p], troops=troops[p]))
+    factors = learning.local_factors()
+    preds = {cls: forecast.forecast(cls, X, {p: b["hist_pc"][p, cls] for p in POSTS}) for cls in CLASSES}
+    soon = PLAN_DAYS + SAFETY_DAYS - 1
     for p in POSTS:
         n = net[p]
-        X = wx[p][["t_mean", "t_min", "snow_cm"]].reset_index().rename(columns={"index": "date"})
-        X = forecast.add_features(X.assign(alt_m=n["alt_m"], tempo=tempo[p], troops=troops[p]))
         classes = {}
         for cls, meta in CLASSES.items():
-            daily = forecast.predict(cls, X) * troops[p]
-            cum = np.cumsum(daily)
+            k = factors.get(p, {}).get(cls, {}).get("k", 1.0)
+            mean_pc, p90_pc = preds[cls][p]
+            daily, high = mean_pc * troops[p] * k, p90_pc * troops[p] * k
+            cum, cum_hi = np.cumsum(daily), np.cumsum(high)
             s = stock[(p, cls)]
-            runout = _first(cum > s)
+            runout, runout_hi = _first(cum > s), _first(cum_hi > s)
             target = cum[cover]
-            short = max(0.0, target - s)
-            urgent = min(short, max(0.0, cum[PLAN_DAYS + SAFETY_DAYS - 1] - s))
-            fc[(p, cls)] = daily
+            # the next three weeks are planned on the P90 forecast: safety stock against a bad fortnight
+            urgent = max(0.0, cum_hi[soon] - s)
+            short = max(target - s, urgent, 0.0)
+            fc[(p, cls)] = (daily, high)
             classes[cls] = {"stock": round(s), "unit": meta["unit"], "daily": round(float(daily[:7].mean()), 1),
-                            "runout_day": runout, "days_of_stock": runout if runout is not None else FORECAST_DAYS,
-                            "target": round(target), "shortfall": round(short), "urgent": round(urgent)}
+                            "runout_day": runout, "runout_p90": runout_hi,
+                            "days_of_stock": runout if runout is not None else FORECAST_DAYS,
+                            "target": round(target), "shortfall": round(short), "urgent": round(urgent),
+                            "local_factor": k}
             if short * meta["kg"] >= 50:
-                demands.append({"post": p, "cls": cls, "runout_day": runout if urgent > 0 else None,
+                first = runout_hi if runout_hi is not None else runout
+                demands.append({"post": p, "cls": cls, "runout_day": first if urgent > 0 else None,
                                 "urgent_kg": urgent * meta["kg"], "stocking_kg": (short - urgent) * meta["kg"]})
-        drivers = {cls: [(k, round(v * troops[p], 2)) for k, v in forecast.explain(cls, X.iloc[:PLAN_DAYS])[:3]]
+        drivers = {cls: [(name, round(v, 1)) for name, v in forecast.explain(cls, _explain_rows(X[p], b, p, cls))[:3]]
                    for cls in CLASSES}
         worst = min(c["days_of_stock"] for c in classes.values())
         posts.append({"id": p, "name": n["name"], "lat": n["lat"], "lon": n["lon"], "alt_m": n["alt_m"],
@@ -170,6 +198,18 @@ def compute_state(ov):
     return state
 
 
+def _explain_rows(X, b, post, cls):
+    """The first two weeks of forecast rows with lags filled from the post's own recent usage."""
+    pc = b["hist_pc"][post, cls]
+    rows = X.iloc[:PLAN_DAYS].copy()
+    n = len(pc)
+    for name, k in (("lag14", 14), ("lag21", 21), ("lag28", 28)):
+        rows[name] = [pc[n - k + i] for i in range(PLAN_DAYS)]
+    rows["r7_14"] = [pc[n - 20 + i:n - 13 + i].mean() for i in range(PLAN_DAYS)]
+    rows["r28_14"] = [pc[n - 41 + i:n - 13 + i].mean() for i in range(PLAN_DAYS)]
+    return rows
+
+
 def _outlook(wx):
     return {p: {"t_mean": round(float(wx[p].t_mean.iloc[:7].mean()), 1),
                 "snow_7d": round(float(wx[p].snow_cm.iloc[:7].sum()), 1)} for p in POSTS}
@@ -194,10 +234,17 @@ def _alerts(state):
         p = post["id"]
         trips = [t for t in plan["trips"] if any(s["post"] == p for s in t["stops"])]
         for cls, c in post["classes"].items():
-            if not c["urgent"]:
+            if c["urgent"] * CLASSES[cls]["kg"] < 50:  # below the planning threshold
                 continue
             r = c["runout_day"]
             lab = CLASSES[cls]["label"].lower()
+            if r is not None:
+                when = f"runs out of {lab} in {r} days"
+            elif c["runout_p90"] is not None:
+                r = c["runout_p90"]
+                when = f"could run out of {lab} in {r} days on a high-use fortnight"
+            else:
+                continue
             carry = [t for t in trips if any(s["post"] == p and cls in s["items"] for s in t["stops"])]
             if (p, cls) in unmet:
                 action, sev = "NO feasible lift before runout: escalate for additional airlift", "critical"
@@ -211,13 +258,15 @@ def _alerts(state):
                     first = min(t["depart_h"] for t in carry if t["mode"] == "heli")
                     action = (f"fly {sum(t['mode'] == 'heli' for t in carry)} helicopter sortie(s) from Onyx, first "
                               f"{day_label(first // 24)}")
-                else:
+                elif carry:
                     action = f"airdrop from Sapphire, {day_label(min(t['depart_h'] for t in carry) // 24)}"
+                else:
+                    action = "no lift planned for it"
                 # the road window shutting before the runout is the winter-stocking danger
                 sev = "critical" if r is not None and (r <= 3 or (cd is not None and cd < r)) else "high"
             alerts.append({"severity": sev, "post": p, "cls": cls, "days": r,
-                           "title": f"{post['name']} runs out of {lab} in {r} days",
-                           "text": f"{post['name']} runs out of {lab} in {r} days; {pass_txt}; {action}."})
+                           "title": f"{post['name']} {when}",
+                           "text": f"{post['name']} {when}; {pass_txt}; {action}."})
         backlog = [(cls, c) for cls, c in post["classes"].items() if c["shortfall"] - c["urgent"] > 0
                    and (c["shortfall"] - c["urgent"]) * CLASSES[cls]["kg"] >= 50]
         if backlog:
@@ -359,7 +408,7 @@ def series(state, post_id, history_days=90):
            "classes": {}}
     for cls in CLASSES:
         g = h[h.cls == cls]
-        daily = state["_fc"][(post_id, cls)]
+        daily, high = state["_fc"][(post_id, cls)]
         s0 = post["classes"][cls]["stock"]
         no_plan = s0 - np.cumsum(daily)
         add = np.zeros(len(daily))
@@ -370,6 +419,8 @@ def series(state, post_id, history_days=90):
             "history": {"dates": g.date.tolist(), "consumed": g.consumed.round(1).tolist(),
                         "stock": g.stock.round(0).tolist()},
             "forecast": np.round(daily, 1).tolist(),
+            "forecast_p90": np.round(high, 1).tolist(),
+            "local_factor": post["classes"][cls]["local_factor"],
             "projected": np.round(np.maximum(no_plan, 0), 0).tolist(),
             "projected_with_plan": np.round(np.maximum(no_plan + add, 0), 0).tolist(),
             "deliveries": [{"day": d, "qty": round(q)} for d, q in sorted(arrivals.get(cls, {}).items())],
