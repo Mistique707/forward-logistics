@@ -2,6 +2,7 @@
 
     py -3.13 demo.py                 # then open http://localhost:8000 (opens automatically)
     py -3.13 demo.py --no-browser --port 8080
+    py -3.13 demo.py --no-sensors     # without the simulated IoT sensor heartbeats
 
 Re-running is safe and deterministic: the synthetic history and the models are rebuilt from
 the fixed seed every time, so the demo scenario is identical on every run.
@@ -73,6 +74,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--no-sensors", action="store_true", help="do not run the simulated IoT sensors")
     args = ap.parse_args()
     if Path(sys.prefix).resolve() != VENV.resolve():
         bootstrap()
@@ -93,6 +95,9 @@ def main():
     url = f"http://localhost:{args.port}"
     print(f"[5/5] serving on {url}  (precomputing scenarios, Ctrl+C to stop)", flush=True)
     threading.Thread(target=announce_when_ready, args=(url, not args.no_browser), daemon=True).start()
+    if not args.no_sensors:  # tank-level sensors and load cells reporting every 20 s (heartbeats unless stock moves)
+        from backend import iot_sim
+        threading.Thread(target=iot_sim.run, args=(url,), daemon=True).start()
     import uvicorn
     uvicorn.run("backend.api:app", host="127.0.0.1", port=args.port, log_level="warning")
 

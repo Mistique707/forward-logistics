@@ -2,7 +2,11 @@
 
     uvicorn backend.api:app --port 8000
 """
+import csv
+import io
 import json
+import os
+import secrets
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -11,12 +15,13 @@ from typing import Literal
 import pandas as pd
 
 import numpy as np
-from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
-from . import forecast, learning, network, scenarios, simulator
+from . import forecast, inventory, learning, network, scenarios, simulator
 from .config import (CLASSES, DATA, DB_PATH, HA_RATION_KCAL, POPULATION_2011, POSTS, RATION_KCAL_PER_KG, ROOT,
                      SECTORS)
 
@@ -30,6 +35,21 @@ async def lifespan(_):
 
 
 app = FastAPI(title="Forward Logistics", lifespan=lifespan)
+
+# Write access. With FL_API_TOKEN unset (the demo) every write is open; set it and every write that changes data
+# needs "Authorization: Bearer <token>". Sensors authenticate separately, with a per-device HMAC signature.
+API_TOKEN = os.environ.get("FL_API_TOKEN")
+
+
+def require_token(authorization: str | None = Header(None)):
+    if API_TOKEN and not (authorization and secrets.compare_digest(authorization.removeprefix("Bearer ").strip(),
+                                                                     API_TOKEN)):
+        raise HTTPException(401, "missing or wrong access token")
+
+
+@app.exception_handler(inventory.Rejected)
+def _rejected(_, ex: inventory.Rejected):
+    return JSONResponse({"detail": ex.detail}, status_code=ex.status)
 
 
 def _json(obj):
@@ -145,10 +165,6 @@ def get_data():
 
 # ---------- inventory checks: the field app today, sensors tomorrow ----------
 
-def _site_ids():
-    return set(POSTS) | {x["id"] for x in learning.live_sites()}
-
-
 class InventoryEvent(BaseModel):
     site_id: str = Field(min_length=1, max_length=40)
     cls: Literal[tuple(CLASSES)]
@@ -156,35 +172,17 @@ class InventoryEvent(BaseModel):
     quantity: float = Field(ge=0, le=1e7)
     observed_at: datetime | None = None
     source: str = Field("api", min_length=1, max_length=32, pattern=r"^[\w.\-]+$")
+    client_id: str | None = Field(None, min_length=8, max_length=64, pattern=r"^[\w.:\-]+$")
 
 
 def _ingest(events, operator):
-    if not events or len(events) > 500:
-        raise HTTPException(422, "send 1-500 records")
-    known = _site_ids()
-    if bad := sorted({e.site_id for e in events} - known):
-        raise HTTPException(422, f"unknown site: {', '.join(bad)}")
-    demo = learning.demo_clock()
-    now = datetime.now()
-    rows = []
-    for e in events:
-        if e.site_id in POSTS:  # demo posts live on the simulated clock: their "today" is the demo date
-            t = now if e.observed_at is None else e.observed_at
-            at = f"{demo.date().isoformat()}T{t.strftime('%H:%M:%S')}"
-        else:
-            at = (e.observed_at or now).isoformat(timespec="seconds")
-        rows.append((e.site_id, e.cls, e.kind, e.quantity, at, e.source + (f":{operator}" if operator else "")))
-    with sqlite3.connect(DB_PATH) as con:
-        con.executemany("INSERT INTO inventory (site_id, cls, kind, quantity, observed_at, source) VALUES "
-                        "(?,?,?,?,?,?)", rows)
-    scenarios.invalidate()
-    learning.maybe_retrain()
-    return {"accepted": len(rows)}
+    return inventory.ingest([e.model_dump() for e in events], operator)
 
 
-@app.post("/api/inventory", status_code=201)
+@app.post("/api/inventory", status_code=201, dependencies=[Depends(require_token)])
 def post_inventory(events: list[InventoryEvent], x_operator: str | None = Header(None, max_length=64)):
-    """Batch of counts, receipts and issues (the offline field app syncs its queue in one call)."""
+    """Batch of counts, receipts and issues (the offline field app syncs its queue in one call). Records carrying a
+    client_id already stored are skipped, so a retried sync never double-counts."""
     return _ingest(events, x_operator)
 
 
@@ -206,7 +204,7 @@ class StockReport(BaseModel):
     source: str = Field("api", min_length=1, max_length=32, pattern=r"^[\w.\-]+$")
 
 
-@app.post("/api/stock-reports", status_code=201)
+@app.post("/api/stock-reports", status_code=201, dependencies=[Depends(require_token)])
 def post_stock_reports(reports: list[StockReport], x_operator: str | None = Header(None, max_length=64)):
     """Stock counts only (kept for simple integrations such as a level sensor)."""
     return _ingest([InventoryEvent(site_id=r.post_id, cls=r.cls, kind="count", quantity=r.quantity,
@@ -228,10 +226,37 @@ def get_sites():
     return _json(demo + [{**x, "kind": "live"} for x in learning.live_sites()])
 
 
-@app.post("/api/sites", status_code=201)
+@app.post("/api/sites", status_code=201, dependencies=[Depends(require_token)])
 def post_site(site: Site):
     """Register a real site (mess, store, canteen) to collect actual usage for the learning loop."""
     return {"id": learning.register_site(site.name, site.lat, site.lon, site.headcount)}
+
+
+# ---------- IoT sensors and book-vs-physical discrepancies ----------
+
+@app.post("/api/telemetry")
+async def post_telemetry(request: Request, x_signature: str | None = Header(None, max_length=80)):
+    """Signed readings from one tank-level sensor or load cell (see backend/iot_sim.py for the client)."""
+    raw = await request.body()
+    if len(raw) > 64_000:
+        raise HTTPException(413, "too large")
+    return _json(await run_in_threadpool(inventory.telemetry, raw, x_signature))
+
+
+@app.get("/api/devices")
+def get_devices():
+    return _json(inventory.devices())
+
+
+@app.get("/api/anomalies")
+def get_anomalies(status: Literal["open", "checked"] = "open"):
+    return _json(inventory.anomalies(status))
+
+
+@app.post("/api/anomalies/{aid}/checked", dependencies=[Depends(require_token)])
+def post_anomaly_checked(aid: int):
+    inventory.resolve_anomaly(aid)
+    return {"ok": True}
 
 
 # ---------- the learning loop ----------
@@ -241,11 +266,42 @@ def get_learning():
     return _json(learning.status())
 
 
-@app.post("/api/learning/retrain", status_code=202)
+@app.post("/api/learning/retrain", status_code=202, dependencies=[Depends(require_token)])
 def post_retrain():
     if not learning.retrain_in_background("manual"):
         raise HTTPException(409, "a retraining run is already in progress")
     return {"started": True}
+
+
+# ---------- movement orders ----------
+
+@app.get("/api/plan.csv")
+def get_plan_csv(preset: str = "baseline"):
+    """The dispatch plan as movement orders: one row per item per stop, ready to print or load elsewhere."""
+    p = next((p for p in scenarios.PRESETS if p["id"] == preset), None)
+    if p is None:
+        raise HTTPException(404, "unknown preset")
+    st = scenarios.get_state(p["overrides"])
+    by_id = network.load()["by_id"]
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["order", "vehicle", "mode", "origin", "via passes", "must leave by", "stop", "destination",
+                "arrives by", "then mule", "item", "quantity", "unit", "vehicle load kg", "capacity kg", "km", "cost INR"])
+    for i, t in enumerate(st["plan"]["trips"], 1):
+        for k, s in enumerate(t["stops"], 1):
+            for cls, q in s["items"].items():
+                w.writerow([f"MO-{st['demo_date'].replace('-', '')}-{i:02d}", t["vehicle"], t["mode"],
+                            by_id[t["origin"]]["name"], " / ".join(t["passes"]),
+                            scenarios.day_label(t["depart_by_h"] // 24, t["depart_by_h"] % 24), k,
+                            by_id[s["post"]]["name"], scenarios.day_label(s["arrive_by_h"] // 24, s["arrive_by_h"] % 24),
+                            "yes" if s["mule"] else "no", CLASSES[cls]["label"], q, CLASSES[cls]["unit"],
+                            t["load_kg"], t["capacity_kg"], t["km"], t["cost"]])
+    for u in st["plan"]["unmet"]:
+        w.writerow(["ESCALATE", "", "", "", "", "", "", by_id[u["post"]]["name"], "", "", CLASSES[u["cls"]]["label"],
+                    round(u["kg"] / CLASSES[u["cls"]]["kg"]), CLASSES[u["cls"]]["unit"], "", "", "", ""])
+    name = f"movement-orders-{st['demo_date']}-{preset}.csv"
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 # ---------- the built dashboard ----------

@@ -20,7 +20,8 @@ import numpy as np
 import pandas as pd
 
 from . import network
-from .config import (CLASSES, DATA, DB_PATH, HA_RATION_KCAL, POSTS, RATION_KCAL_PER_KG, SECTORS, SEED, SIM_START,
+from .config import (CLASSES, DATA, DB_PATH, HA_RATION_KCAL, IOT_DEVICES, POSTS, RATION_KCAL_PER_KG, SECTORS, SEED,
+                     SIM_START,
                      TRANSIENT_CLOSE_SNOW_CM, ZOJILA_CLOSE_SNOW_3D_CM, ZOJILA_EARLIEST_CLOSE, ZOJILA_MIN_CLOSED_DAYS,
                      ZOJILA_REOPEN_TEMP_C)
 
@@ -293,7 +294,11 @@ def simulate():
               for p in passes_open]
     last = daily[daily.date == dates[-1].strftime("%Y-%m-%d")]
     counts = pd.DataFrame({"site_id": last.post_id, "cls": last.cls, "kind": "count", "quantity": last.stock,
-                           "observed_at": end.strftime("%Y-%m-%dT06:00:00"), "source": "simulator"})
+                           "observed_at": end.strftime(f"%Y-%m-%dT{SNAPSHOT_TIME}"), "source": "simulator"})
+    peak = daily[daily.date >= (end - pd.Timedelta(days=365)).strftime("%Y-%m-%d")].groupby(["post_id", "cls"]).stock.max()
+    devices = pd.DataFrame([{"id": d, "site_id": p, "cls": c, "kind": k,
+                             "capacity": float(np.ceil(peak[p, c] * 1.15 / 1000) * 1000), "secret": device_secret(d)}
+                            for d, p, c, k in IOT_DEVICES])
 
     DB_PATH.unlink(missing_ok=True)
     with sqlite3.connect(DB_PATH) as con:
@@ -302,21 +307,38 @@ def simulate():
         pd.concat(status).to_sql("pass_status", con, index=False)
         con.executescript(SCHEMA)
         counts.to_sql("inventory", con, index=False, if_exists="append")
+        devices.to_sql("devices", con, index=False, if_exists="append")
         pd.DataFrame(events, columns=["date", "post_id", "text"]).to_sql("events", con, index=False)
         pd.DataFrame({"key": ["demo_date"], "value": [end.strftime("%Y-%m-%d")]}).to_sql("meta", con, index=False)
     print(f"simulated {n} days x {len(POSTS)} posts x {len(CLASSES)} classes -> {DB_PATH}; demo date {end.date()}")
 
 
-# Inventory events (counts, receipts, issues) from the field app or any other source, and the live sites
-# people register to collect real data.
+# Inventory events (counts, receipts, issues) from the field app, IoT sensors or any other source, and the live
+# sites people register to collect real data. client_id makes a retried upload idempotent: the field app and the
+# sensors tag every record with a unique id, and a record that arrives twice is stored once.
 SCHEMA = """
 CREATE TABLE inventory (id INTEGER PRIMARY KEY, site_id TEXT NOT NULL, cls TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('count', 'receipt', 'issue')), quantity REAL NOT NULL CHECK (quantity >= 0),
-  observed_at TEXT NOT NULL, source TEXT NOT NULL, received_at TEXT DEFAULT CURRENT_TIMESTAMP);
+  observed_at TEXT NOT NULL, source TEXT NOT NULL, received_at TEXT DEFAULT CURRENT_TIMESTAMP, client_id TEXT);
 CREATE INDEX ix_inventory ON inventory(site_id, cls, observed_at);
+CREATE UNIQUE INDEX ux_inventory_client ON inventory(client_id) WHERE client_id IS NOT NULL;
 CREATE TABLE sites (id TEXT PRIMARY KEY, name TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL,
   alt_m REAL NOT NULL, headcount INTEGER NOT NULL CHECK (headcount > 0), created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE devices (id TEXT PRIMARY KEY, site_id TEXT NOT NULL, cls TEXT NOT NULL, kind TEXT NOT NULL,
+  capacity REAL NOT NULL, secret TEXT NOT NULL, last_seq INTEGER DEFAULT -1, last_seen TEXT, last_fill_pct REAL,
+  battery_pct REAL);
+CREATE TABLE anomalies (id INTEGER PRIMARY KEY, site_id TEXT NOT NULL, cls TEXT NOT NULL, book REAL NOT NULL,
+  observed REAL NOT NULL, source TEXT NOT NULL, observed_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 """
+SNAPSHOT_TIME = "06:00:00"  # the simulator's stock count on the demo day; later records must sort after it
+
+
+def device_secret(device_id):
+    """Demo-only per-device HMAC key, derived from the seed. A real deployment provisions keys at install."""
+    import hashlib
+    import hmac
+    return hmac.new(f"forward-logistics-{SEED}".encode(), device_id.encode(), hashlib.sha256).hexdigest()[:32]
 
 
 def _alpha_loss(stock, troops, tempo, node, end, habit):

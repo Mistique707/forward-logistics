@@ -24,7 +24,8 @@ In reality the pass shut on 28 Feb 2025 and reopened on 1 Apr. The *What really 
 ## Run the demo
 
 ```bash
-py -3.13 demo.py
+py -3.13 demo.py          # Windows
+python3.13 demo.py        # Linux / macOS
 ```
 
 That single command does the following:
@@ -34,7 +35,9 @@ That single command does the following:
 - builds the dashboard
 - serves everything at **http://localhost:8000**, opening the browser when it is ready
 
-The inventory-check app runs at **http://localhost:8000/field/**.
+The inventory-check app runs at **http://localhost:8000/field/** (English / हिंदी). Seven simulated IoT sensors
+(tank-level sensors on fuel tanks, a load cell under a ration stack) start reporting with it; `--no-sensors` turns
+them off.
 
 - Prerequisites: **Python 3.13** (3.14 has no LightGBM or OR-Tools wheels) and **Node.js 18+**.
 - The first run takes a few minutes. Later runs take about 45 s.
@@ -42,7 +45,7 @@ The inventory-check app runs at **http://localhost:8000/field/**.
   re-recorded with identical numbers. Records added in a previous run are cleared.
 - It works offline after the first run. Only the terrain tiles (Esri) need internet. Weather for a newly
   registered live site also needs internet, because it is fetched from Open-Meteo.
-- Tests: `.venv\Scripts\python -m pytest` (15 checks).
+- Tests: `.venv\Scripts\python -m pytest` (22 checks; `.venv/bin/python -m pytest` on Linux / macOS).
 
 ---
 
@@ -59,7 +62,9 @@ The inventory-check app runs at **http://localhost:8000/field/**.
 | 7 | Click **Troop surge at Post Bravo (+60%)**, then **Today, as forecast**. | Bravo drops to 21 days and gets 2 trucks. The forecast scales per person, so a surge carries straight through. |
 | 8 | Open **Forecast & learning**. | The accuracy table compares a simple average, our first model, Sujal's model and the **combined model in use**, which keeps the better of the two parents in each item. The loop diagram and the *new site* table show what local learning buys: a brand-new site's kerosene error falls from 18.0% to 11.7% after two weeks of checks. Below are each site's correction factor, the model versions and **Retrain now**. |
 | 9 | Open **Data sources**. | Real Zoji La closures against our rule: dates are 2.8 days off on average. Real Ladakh fuel sales from PPAC. Ladakh uses 3.9× the all-India petroleum per person. The ration scale comes from DRDO. A plain list states what is still simulated. |
-| 10 | Click **Open inventory check ↗** in a phone-sized window. Choose Post Alpha, select **Received**, enter kerosene `200` and save. | Within about 5 s the dashboard shows a toast and Alpha moves from 9 to 12 days of kerosene. Tick *Simulate no signal* first to show the record waiting offline, then untick it to send. |
+| 10 | Click **Open inventory check ↗** in a phone-sized window. Tap **हिं** to show the Hindi form, then **EN** to switch back. Choose Post Alpha, select **Received**, enter kerosene `200` and save. | Within about 5 s the dashboard shows a toast and Alpha moves from 9 to 12 days of kerosene. Tick *Simulate no signal* first to show the record waiting offline, then untick it to send. A retried upload is stored once. |
+| 11 | In a terminal run `py -3.13 -m backend.iot_sim --once --leak TNK-ECHO-DSL --pct 22` (Linux / macOS: `.venv/bin/python -m backend.iot_sim …`). | The Echo diesel tank sensor reads 22% below the books. Within 5 s a **Check store** card appears: "Post Echo diesel: 22% below book stock … verify the store: leak, pilferage or an unrecorded issue". Open Post Echo to show its sensors, their heartbeat and battery. Click **Mark as checked**. |
+| 12 | Open **Dispatch plan**, click **Movement orders ↓**. | A CSV with one row per item per stop: vehicle, route, must-leave-by, arrival, mule leg, quantities. Ready to print or load into another system. |
 
 ---
 
@@ -76,6 +81,8 @@ backend/
   learning.py           inventory -> usage, per-site correction layer, champion/challenger retraining
   planner.py            OR-Tools multi-modal routing (truck + mule, helicopter, airdrop)
   scenarios.py          state engine: forecast -> runout -> demand -> plan -> alerts; what-if + diff
+  inventory.py          ingestion: idempotent records, sensor telemetry (signed), book-vs-physical discrepancies
+  iot_sim.py            stand-in for the tank-level sensors and load cells
   api.py                FastAPI; also serves the dashboard and the inventory app
 frontend/               React + Vite + Leaflet + Recharts dashboard; public/field/ is the offline inventory PWA
 data/                   cached open data; data/real/ holds the real closure record and PPAC sales
@@ -164,6 +171,31 @@ new, and the layer learns from its first 14 days:
    28 site-days have accumulated the shared model retrains on them. Real local weather for the site comes from
    Open-Meteo automatically.
 
+### IoT inventory tracking and book-vs-physical checks
+
+- **Sensors:** each instrumented store has a device (ultrasonic level sensor on a fuel tank, load cell under a
+  ration stack) that reports its fill level. `backend/iot_sim.py` stands in for the hardware.
+- **Low bandwidth:** sensors report by exception. A reading within 0.5% of capacity of the book stock is only a
+  heartbeat; a changed level becomes a stock count. A message can carry up to 200 buffered readings, so a device
+  that lost its link catches up in one call.
+- **Security:** every message is signed with the device's key (HMAC-SHA256, `X-Signature` header) and carries a
+  rising sequence number. Forged messages get 401; replays are dropped. The demo derives keys from the seed; a real
+  deployment provisions them at installation.
+- **Discrepancies:** any count (sensor or field app) that is more than 10% and more than two days of forecast use
+  below book stock raises a *Check store* alert: leak, pilferage or an unrecorded issue. *Mark as checked* closes it.
+
+### Data integrity and access
+
+- **Idempotent sync:** every field-app record carries a unique `client_id`; a batch that is sent twice (lost reply,
+  flaky link) is stored once. The app also never runs two uploads at the same time.
+- **Demo clock:** demo-post records apply in arrival order on the frozen demo day, whatever the wall-clock time.
+- **Live sites:** a second site with a similar name gets its own id; it never overwrites another site.
+- **Access:** set `FL_API_TOKEN` and every write (inventory, sites, retraining, discrepancies) needs
+  `Authorization: Bearer <token>`. Open the dashboard or the field app once with `?key=<token>` to store it on the
+  device. Unset (the demo), writes are open.
+- **Stock-outs:** a post that is already out, or that nothing can reach before it runs out, still gets the
+  earliest feasible lift, flagged as late ("escalate, and ration until then"), instead of no plan.
+
 ### Route and load planner
 
 Google OR-Tools solves one routing model:
@@ -194,8 +226,13 @@ reopening, surge, grounding, cold and tempo.
 | POST | `/api/stock-reports` | Counts only, for simple integrations such as a level sensor |
 | GET / POST | `/api/sites` | Demo posts and live sites; register a live site |
 | GET | `/api/learning` · POST `/api/learning/retrain` | Learning status, correction factors, versions · start a retrain |
+| POST | `/api/telemetry` | Signed sensor readings (HMAC-SHA256 in `X-Signature`) |
+| GET | `/api/devices` | Sensors: last reading, heartbeat, battery, the book stock they should match |
+| GET · POST | `/api/anomalies` · `/api/anomalies/{id}/checked` | Book-vs-physical discrepancies · close one |
+| GET | `/api/plan.csv?preset=…` | The dispatch plan as movement orders (CSV) |
 
-Authentication is a stub: an optional `X-Operator` header is stored with each record.
+Writes need a bearer token when `FL_API_TOKEN` is set; sensors sign every message. An optional `X-Operator`
+header (the callsign in the field app) is stored with each record as an audit trail.
 
 ## Team
 

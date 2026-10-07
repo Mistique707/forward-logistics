@@ -1,17 +1,17 @@
 import { useEffect, useState } from 'react'
 import { Area, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import MapView from './MapView.jsx'
-import { CLASS_ORDER, STATUS_WORD, TEMPO, api, classStatus, dayLabel, daysText, isoDay, num, worstStatus } from './util.js'
+import { CLASS_ORDER, STATUS_WORD, TEMPO, ago, api, classStatus, dayLabel, daysText, isoDay, num, worstStatus } from './util.js'
 
 const SEV = { critical: 'Act now', high: 'Act soon', warning: 'Top up' }
 
-export default function Overview({ state, net, scenario, post, cls, onPost, onCls, busy, scenarioName }) {
+export default function Overview({ state, net, scenario, post, cls, onPost, onCls, busy, scenarioName, devices = [], onChecked }) {
   return (
     <div className="overview">
       <div className="side card">
         {post ? <PostDetail state={state} scenario={scenario} post={post} cls={cls} onCls={onCls} onBack={() => onPost(null)}
-          classes={net.classes} />
-          : <ActionList state={state} onPost={onPost} />}
+          classes={net.classes} devices={devices.filter((d) => d.site_id === post)} />
+          : <ActionList state={state} onPost={onPost} devices={devices} onChecked={onChecked} />}
       </div>
       <div className="map-card card">
         <MapView net={net} state={state} post={post} onPost={onPost} trips={[]} />
@@ -22,17 +22,25 @@ export default function Overview({ state, net, scenario, post, cls, onPost, onCl
   )
 }
 
-function ActionList({ state, onPost }) {
-  const urgent = state.alerts.filter((a) => a.cls)
-  const topups = state.alerts.filter((a) => !a.cls)
+function ActionList({ state, onPost, devices, onChecked }) {
+  const urgent = state.alerts.filter((a) => a.kind !== 'stocking')
+  const topups = state.alerts.filter((a) => a.kind === 'stocking')
+  const online = devices.filter((d) => d.online).length
   const posts = [...state.posts].sort((a, b) => a.worst_days - b.worst_days)
   return (
     <>
       <div className="card-h"><h2>What needs action</h2><span className="r">{urgent.length + topups.length} items</span></div>
       <div className="scroll card-b">
         {urgent.length === 0 && topups.length === 0 && <div className="empty">Every post is stocked to its winter target.</div>}
-        {urgent.map((a, i) => <Action key={i} a={a} onPost={onPost} />)}
+        {urgent.map((a, i) => <Action key={i} a={a} onPost={onPost} onChecked={onChecked} />)}
         {topups.map((a, i) => <Action key={`t${i}`} a={a} onPost={onPost} />)}
+        {devices.length > 0 && (
+          <div className="sensors-line" title="Tank-level sensors and load cells report by exception: a reading that matches the books is a heartbeat only.">
+            <span className={`led ${online === devices.length ? 'on' : online ? 'part' : 'off'}`} />
+            IoT sensors: <b>{online} of {devices.length}</b> reporting
+            <span className="muted"> · {new Set(devices.map((d) => d.site_id)).size} posts instrumented</span>
+          </div>
+        )}
         <div className="section">
           <h4>All posts<span className="r">days of stock, lowest item</span></h4>
           <div className="posts">
@@ -54,18 +62,22 @@ function ActionList({ state, onPost }) {
   )
 }
 
-function Action({ a, onPost }) {
+function Action({ a, onPost, onChecked }) {
+  const cap = (t) => t.replace(/^./, (c) => c.toUpperCase())
   return (
-    <button className={`action ${a.severity}`} onClick={() => onPost(a.post, a.cls)}>
-      <div className="row1"><span className={`pill ${a.severity}`}>{SEV[a.severity]}</span>{a.cls && <span className="days">{a.days} d left</span>}</div>
+    <div role="button" tabIndex={0} className={`action ${a.severity} ${a.kind}`} onClick={() => onPost(a.post, a.cls)}
+      onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onPost(a.post, a.cls)}>
+      <div className="row1"><span className={`pill ${a.severity}`}>{a.kind === 'anomaly' ? 'Check store' : SEV[a.severity]}</span>
+        {a.kind === 'runout' && a.days !== null && <span className="days">{a.days === 0 ? 'out now' : `${a.days} d left`}</span>}</div>
       <h3>{a.title}</h3>
-      <div className="what">{a.context.replace(/^./, (c) => c.toUpperCase())}.</div>
-      <div className="do">→ {a.action.replace(/^./, (c) => c.toUpperCase())}</div>
-    </button>
+      <div className="what">{cap(a.context)}.</div>
+      <div className="do">→ {cap(a.action)}</div>
+      {a.kind === 'anomaly' && onChecked && <button className="btn ghost small-btn" onClick={(e) => { e.stopPropagation(); onChecked(a.id) }}>Mark as checked</button>}
+    </div>
   )
 }
 
-function PostDetail({ state, scenario, post, cls, onCls, onBack, classes }) {
+function PostDetail({ state, scenario, post, cls, onCls, onBack, classes, devices }) {
   const [series, setSeries] = useState(null)
   useEffect(() => {
     let live = true
@@ -105,6 +117,18 @@ function PostDetail({ state, scenario, post, cls, onCls, onBack, classes }) {
             </button>
           )
         })}
+        {devices.length > 0 && (
+          <div className="section">
+            <h4>Sensors<span className="r">report by exception</span></h4>
+            {devices.map((d) => (
+              <div className="sensor" key={d.id}>
+                <span className={`led ${d.online ? 'on' : 'off'}`} />
+                <span><b>{classes[d.cls].label}</b> {d.kind === 'tank-level' ? 'tank level' : 'load cell'}<span className="sub">{d.id} · seen {ago(d.age_s)}{d.battery_pct ? ` · battery ${num(d.battery_pct)}%` : ''}</span></span>
+                <span className="num">{d.last_fill_pct === null ? '–' : `${num(d.last_fill_pct, 1)}%`}<small>{num(d.capacity)} {d.unit} {d.kind === 'tank-level' ? 'tank' : 'capacity'}</small></span>
+              </div>
+            ))}
+          </div>
+        )}
         {s && <StockChart s={s} c={c} state={state} dates={series.dates} unit={unit} label={label} />}
         {s && (
           <div className="section">
@@ -154,9 +178,9 @@ function StockChart({ s, c, state, dates, unit, label }) {
           <Line dataKey="withPlan" stroke="#1a7f37" strokeWidth={2} dot={false} isAnimationActive={false} />
           <ReferenceLine x={isoDay(demo, 0)} stroke="#6a717d" label={{ value: 'today', fill: '#6a717d', fontSize: 10, position: 'insideTopRight' }} />
           {zo.close_day > 0 && <ReferenceLine x={isoDay(demo, zo.close_day)} stroke="#d98a0b" strokeDasharray="3 3"
-            label={{ value: 'Zoji La shuts', fill: '#9a5b00', fontSize: 10, position: 'insideTopLeft' }} />}
+            label={{ value: 'pass shuts', fill: '#9a5b00', fontSize: 10, position: 'insideTopLeft' }} />}
           {zo.reopen_day !== null && zo.reopen_day < horizon && <ReferenceLine x={isoDay(demo, zo.reopen_day)} stroke="#1a7f37" strokeDasharray="3 3"
-            label={{ value: 'reopens', fill: '#1a7f37', fontSize: 10, position: 'insideTopRight' }} />}
+            label={{ value: 'reopens', fill: '#1a7f37', fontSize: 10, position: 'insideTopLeft', dy: 13 }} />}
         </ComposedChart>
       </ResponsiveContainer>
     </div>

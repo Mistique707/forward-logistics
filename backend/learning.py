@@ -53,13 +53,16 @@ def live_sites():
 
 def register_site(name, lat, lon, headcount):
     from .fetch_data import elevation
-    sid = "LIVE-" + re.sub(r"[^A-Z0-9]+", "-", name.upper()).strip("-")[:24]
+    base = "LIVE-" + (re.sub(r"[^A-Z0-9]+", "-", name.upper()).strip("-")[:24] or "SITE")
     try:
-        alt = float(elevation([(lat, lon)])[0])
-    except OSError:
+        alt = float(elevation([(lat, lon)], timeout=8, retries=1)[0])
+    except (OSError, ValueError, KeyError):
         alt = 0.0  # offline: altitude only matters for heating and ration effects
     with _db() as con:
-        con.execute("INSERT OR REPLACE INTO sites (id, name, lat, lon, alt_m, headcount) VALUES (?,?,?,?,?,?)",
+        taken = {r[0] for r in con.execute("SELECT id FROM sites WHERE id = ? OR id LIKE ?", (base, base + "-%"))}
+        # a second site with a similar name gets its own id; it never overwrites another site's records
+        sid = next(c for c in (base if i == 1 else f"{base}-{i}" for i in range(1, 10 ** 4)) if c not in taken)
+        con.execute("INSERT INTO sites (id, name, lat, lon, alt_m, headcount) VALUES (?,?,?,?,?,?)",
                     (sid, name, lat, lon, alt, headcount))
     return sid
 
@@ -75,7 +78,7 @@ def _site_weather(lat, lon, day):
     url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode({
         "latitude": lat, "longitude": lon, "past_days": 92, "forecast_days": 16, "timezone": "auto",
         "daily": "temperature_2m_mean,temperature_2m_min,snowfall_sum"})
-    d = json.loads(_get(url, timeout=30))["daily"]
+    d = json.loads(_get(url, timeout=15, retries=1))["daily"]
     return pd.DataFrame({"t_mean": d["temperature_2m_mean"], "t_min": d["temperature_2m_min"],
                          "snow_cm": d["snowfall_sum"]}, index=pd.to_datetime(d["time"])).ffill().bfill()
 

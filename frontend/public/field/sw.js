@@ -1,5 +1,5 @@
 // The app shell is cached so the form opens with no signal; API calls always go to the network.
-const SHELL = 'field-v2'
+const SHELL = 'field-v3'
 const FILES = ['/field/', '/field/manifest.webmanifest', '/favicon.svg']
 
 self.addEventListener('install', (e) => e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())))

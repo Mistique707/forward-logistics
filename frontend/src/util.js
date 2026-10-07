@@ -8,9 +8,19 @@ export const TEMPO = { 1: 'Quiet', 2: 'Elevated', 3: 'High' }
 export const PLACE = { SAPPHIRE: 'Sapphire', ONYX: 'Onyx', KESTREL: 'Kestrel' }
 export const PASS = { ZOJILA: 'Zoji La', KHARDUNG: 'Khardung La', CHANG: 'Chang La' }
 
+// Write access key (only needed when the server sets FL_API_TOKEN): open the dashboard once with ?key=<token>
+const KEY = (() => {
+  try {
+    const k = new URLSearchParams(location.search).get('key')
+    if (k) { localStorage.setItem('fl.key', k); history.replaceState(null, '', location.pathname) }
+    return localStorage.getItem('fl.key')
+  } catch { return null }
+})()
+
 export async function api(path, body, method) {
+  const auth = KEY ? { authorization: `Bearer ${KEY}` } : {}
   const r = await fetch(`/api/${path}`, body === undefined && !method ? {} : {
-    method: method || 'POST', headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
+    method: method || 'POST', headers: { 'content-type': 'application/json', ...auth }, body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`${path}: ${r.status}`)
   return r.json()
@@ -45,3 +55,4 @@ export const worstStatus = (post) =>
 export const STATUS_WORD = { critical: 'Act now', warning: 'Top up', good: 'On target' }
 export const riskStatus = (r) => (r >= 0.55 ? 'critical' : r >= 0.3 ? 'warning' : 'good')
 export const daysText = (d) => (d >= 180 ? '180+ d' : `${d} d`)
+export const ago = (s) => (s === null || s === undefined ? 'never' : s < 60 ? `${s} s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`)

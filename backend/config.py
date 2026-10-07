@@ -76,6 +76,23 @@ MODES = {
                 "sorties_per_day": 1, "base": "SAPPHIRE", "max_gust": 35, "max_cloud": 70, "loss": 0.10},
 }
 
+# IoT inventory sensors on the demo posts: ultrasonic level sensors on fuel tanks and load cells under ration
+# stacks. (id, post, class, kind); capacity is sized from each store's peak stock when the history is built.
+IOT_DEVICES = [
+    ("TNK-BRAVO-KER", "BRAVO", "kerosene", "tank-level"),
+    ("TNK-BRAVO-DSL", "BRAVO", "diesel", "tank-level"),
+    ("TNK-ECHO-KER", "ECHO", "kerosene", "tank-level"),
+    ("TNK-ECHO-DSL", "ECHO", "diesel", "tank-level"),
+    ("TNK-GOLF-DSL", "GOLF", "diesel", "tank-level"),
+    ("TNK-HOTEL-DSL", "HOTEL", "diesel", "tank-level"),
+    ("LDC-DELTA-RAT", "DELTA", "rations", "load-cell"),
+]
+IOT_DEADBAND_PCT = 0.5     # a reading within this share of capacity of the book stock is a heartbeat only
+IOT_ONLINE_S = 90          # a device not heard from for this long shows as offline
+# A physical count this far below book stock is flagged (leak, pilferage or an unrecorded issue):
+ANOMALY_SHARE = 0.10       # ...more than 10% of book stock
+ANOMALY_DAYS = 2           # ...and more than two days of forecast use
+
 PLAN_DAYS = 14
 FORECAST_DAYS = 180
 WEATHER_FORECAST_DAYS = 16  # beyond this the forecast uses climatology

@@ -4,7 +4,7 @@ import { MapContainer, Marker, Polyline, TileLayer, Tooltip, useMap } from 'reac
 import { MODES, STATUS_WORD, TEMPO, daysText, riskStatus, worstStatus } from './util.js'
 
 const ROUTE = { good: '#9aa1ab', warning: '#e8a33d', critical: '#c42b1c' } // low-risk roads stay quiet
-const SIDE = { CHARLIE: 'left', DELTA: 'left', ECHO: 'left', GOLF: 'left', KESTREL: 'below', ONYX: 'below', SAPPHIRE: 'below' }
+const SIDE = { ALPHA: 'above', CHARLIE: 'left', DELTA: 'below', ECHO: 'left', GOLF: 'left', KESTREL: 'below', ONYX: 'below', SAPPHIRE: 'below' }
 const TYPE = { base: 'base depot', depot: 'depot', airhead: 'airhead' }
 const TOWNS = [['Srinagar', 34.07, 74.79], ['Sonamarg', 34.30, 75.29], ['Drass', 34.43, 75.76], ['Kargil', 34.56, 76.13],
   ['Lamayuru', 34.28, 76.77], ['Leh', 34.16, 77.58], ['Diskit', 34.55, 77.55], ['Tangtse', 34.03, 78.17]]

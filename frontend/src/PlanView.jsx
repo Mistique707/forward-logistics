@@ -3,6 +3,7 @@ import MapView from './MapView.jsx'
 import { CLASS_ORDER, MODES, PASS, PLACE, hourLabel, lakh, num, tonnes } from './util.js'
 
 export default function PlanView({ state, net, onPost }) {
+  const preset = state.preset && state.preset !== 'custom' ? state.preset : null
   const [focus, setFocus] = useState(null)
   const { trips, unmet, deferred, totals } = state.plan
   const demo = state.demo_date
@@ -12,7 +13,8 @@ export default function PlanView({ state, net, onPost }) {
     <div className="plan">
       <div className="card side">
         <div className="card-h"><h2>What to send, and by when</h2>
-          <span className="r">{trips.length} lift{trips.length === 1 ? '' : 's'} · {tonnes(trips.reduce((a, t) => a + t.load_kg, 0))} · {lakh(totals.cost / 1e5)}</span></div>
+          <span className="r">{trips.length} lift{trips.length === 1 ? '' : 's'} · {tonnes(trips.reduce((a, t) => a + t.load_kg, 0))} · {lakh(totals.cost / 1e5)}</span>
+          {trips.length > 0 && preset && <a className="linkbtn" href={`/api/plan.csv?preset=${preset}`} download title="One row per item per stop: print it or load it into another system">Movement orders ↓</a>}</div>
         <div className="scroll card-b">
           {unmet.length > 0 && <div className="callout crit"><b>Cannot reach in time:</b> {unmet.map((u) => `${u.post} ${u.cls} (${tonnes(u.kg)})`).join(', ')}.
             No transport can land it before it runs out. Escalate for extra airlift.</div>}
@@ -30,6 +32,7 @@ export default function PlanView({ state, net, onPost }) {
                 {PLACE[t.origin]}{t.passes.map((p) => <span key={p}> → {PASS[p]}</span>)}
                 {t.stops.map((s) => <span key={s.post}> → <b>{s.post[0] + s.post.slice(1).toLowerCase()}</b>{s.mule && ' (then mule)'}</span>)}
               </div>
+              {t.stops.some((s) => s.late?.length) && <div className="late">Lands after the runout: earliest possible lift. Escalate and ration until it lands.</div>}
               <div className="grid">
                 <div><div className="k">Must leave by</div><div className="deadline">{hourLabel(demo, t.depart_by_h)}</div></div>
                 <div><div className="k">Arrives</div><div>{t.stops.map((s) => hourLabel(demo, s.arrive_h)).join(', ')}</div></div>

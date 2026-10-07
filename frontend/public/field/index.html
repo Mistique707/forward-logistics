@@ -18,7 +18,9 @@
     header { display: flex; align-items: center; gap: 10px; }
     h1 { font-size: 17px; margin: 0; }
     header p { margin: 0; font-size: 13px; color: var(--muted); }
-    .pill { margin-left: auto; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+    .langbtn { margin-left: auto; border: 1px solid var(--line-2); background: var(--surface); border-radius: 8px; padding: 4px 10px; font-size: 14px; font-weight: 600; color: var(--accent); }
+    .log .x { color: var(--critical); font-weight: 600; }
+    .pill { margin-left: 6px; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
     .pill.on { color: var(--good); background: var(--good-soft); }
     .pill.off { color: var(--warning); background: var(--warning-soft); }
     .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
@@ -46,48 +48,49 @@
 <main>
   <header>
     <svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#1f5fbf"/><path d="M5 24 13 9l5 8 3-4 6 11z" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/><circle cx="21" cy="12" r="2.4" fill="#fbd38d"/></svg>
-    <div><h1>Inventory check</h1><p>Works offline · sends when signal returns</p></div>
+    <div><h1 data-i18n="title">Inventory check</h1><p data-i18n="subtitle">Works offline · sends when signal returns</p></div>
+    <button id="lang" class="langbtn" type="button" aria-label="भाषा / Language">हिं</button>
     <span id="net" class="pill" role="status">…</span>
   </header>
 
   <section class="card">
-    <label for="site">Site</label>
+    <label for="site" data-i18n="site">Site</label>
     <select id="site"></select>
     <p class="hint" id="sitehint" style="margin-top:8px"></p>
-    <button class="link" id="showreg" type="button">+ Register a new site to collect real data</button>
+    <button class="link" id="showreg" type="button" data-i18n="showreg">+ Register a new site to collect real data</button>
     <form id="reg" hidden style="margin-top:12px">
-      <label for="rname">Site name (e.g. Hostel mess, Unit canteen)</label>
+      <label for="rname" data-i18n="rname">Site name (e.g. Hostel mess, Unit canteen)</label>
       <input id="rname" required minlength="2" maxlength="60" autocomplete="off" />
       <div class="grid2" style="margin-top:10px">
-        <div><label for="rlat">Latitude</label><input id="rlat" required inputmode="decimal" /></div>
-        <div><label for="rlon">Longitude</label><input id="rlon" required inputmode="decimal" /></div>
+        <div><label for="rlat" data-i18n="lat">Latitude</label><input id="rlat" required inputmode="decimal" /></div>
+        <div><label for="rlon" data-i18n="lon">Longitude</label><input id="rlon" required inputmode="decimal" /></div>
       </div>
-      <button class="link" id="locate" type="button" style="margin-top:8px">Use this device's location</button>
-      <label for="rhead" style="margin-top:10px">People served each day</label>
+      <button class="link" id="locate" type="button" style="margin-top:8px" data-i18n="locate">Use this device's location</button>
+      <label for="rhead" style="margin-top:10px" data-i18n="rhead">People served each day</label>
       <input id="rhead" required inputmode="numeric" />
-      <button class="primary" type="submit">Register site</button>
+      <button class="primary" type="submit" data-i18n="register">Register site</button>
     </form>
   </section>
 
   <form id="form" class="card">
     <div class="seg" role="tablist" aria-label="Record type">
-      <button type="button" data-kind="count" class="on">Stock count</button>
-      <button type="button" data-kind="receipt">Received</button>
-      <button type="button" data-kind="issue">Issued</button>
+      <button type="button" data-kind="count" class="on" data-i18n="kind_count_btn">Stock count</button>
+      <button type="button" data-kind="receipt" data-i18n="kind_receipt_btn">Received</button>
+      <button type="button" data-kind="issue" data-i18n="kind_issue_btn">Issued</button>
     </div>
     <p class="hint" id="kindhint"></p>
     <div id="rows"></div>
-    <label for="op" style="margin-top:12px">Your callsign (optional)</label>
+    <label for="op" style="margin-top:12px" data-i18n="op">Your callsign (optional)</label>
     <input id="op" maxlength="32" placeholder="e.g. QM-ALPHA" autocomplete="off" />
-    <button class="primary" type="submit">Save record</button>
+    <button class="primary" type="submit" data-i18n="save">Save record</button>
     <p class="msg" id="msg" role="status"></p>
   </form>
 
   <section class="card">
-    <label class="toggle" for="force"><span>Simulate no signal (drill)</span><input type="checkbox" id="force" /></label>
+    <label class="toggle" for="force"><span data-i18n="drill">Simulate no signal (drill)</span><input type="checkbox" id="force" /></label>
   </section>
 
-  <section class="card log"><label>Records on this device</label><div id="log"></div></section>
+  <section class="card log"><label data-i18n="logtitle">Records on this device</label><div id="log"></div></section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id)
@@ -96,14 +99,60 @@ const store = {
   set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)) } catch {} },
 }
 const ITEMS = {
-  kerosene: { label: 'Kerosene / cooking fuel', unit: 'L' }, rations: { label: 'Rations / food', unit: 'kg' },
-  diesel: { label: 'Diesel', unit: 'L' }, ammunition: { label: 'Ammunition', unit: 'kg', demoOnly: true },
-  medical: { label: 'Medical stores', unit: 'kg' },
+  kerosene: { unit: 'L' }, rations: { unit: 'kg' }, diesel: { unit: 'L' }, ammunition: { unit: 'kg', demoOnly: true }, medical: { unit: 'kg' },
 }
-const KIND = {
-  count: 'Count what is physically on hand right now.',
-  receipt: 'Enter what arrived since your last record.',
-  issue: 'Enter what was issued or used today.',
+// English and Hindi; the choice is remembered on the device
+const TEXT = {
+  en: {
+    title: 'Inventory check', subtitle: 'Works offline · sends when signal returns', site: 'Site',
+    showreg: '+ Register a new site to collect real data', rname: 'Site name (e.g. Hostel mess, Unit canteen)', lat: 'Latitude', lon: 'Longitude',
+    locate: "Use this device's location", rhead: 'People served each day', register: 'Register site',
+    kind_count_btn: 'Stock count', kind_receipt_btn: 'Received', kind_issue_btn: 'Issued', op: 'Your callsign (optional)', save: 'Save record',
+    drill: 'Simulate no signal (drill)', logtitle: 'Records on this device',
+    hint_count: 'Count what is physically on hand right now.', hint_receipt: 'Enter what arrived since your last record.', hint_issue: 'Enter what was issued or used today.',
+    item_kerosene: 'Kerosene / cooking fuel', item_rations: 'Rations / food', item_diesel: 'Diesel', item_ammunition: 'Ammunition', item_medical: 'Medical stores',
+    kind_count: 'count', kind_receipt: 'received', kind_issue: 'issued',
+    online: 'Online', sending: (n) => `Sending ${n}`, offline: (n) => `Offline · ${n} waiting`,
+    groupLive: 'Live sites (real data)', groupDemo: 'Demo posts',
+    hintLive: (n) => `Live site · ${n} people · records here train the forecast on real usage.`,
+    hintDemo: 'Demo post · records are dated to the demo day and update the dashboard at once.',
+    sent: (n) => `Sent ${n} record(s).`, unreachable: 'Server unreachable: records stay on this device and will retry.',
+    needKey: 'This server needs an access key. Ask the admin for the link.', rejected: 'The server refused these records (unknown site?). They are marked on this device.',
+    enterOne: 'Enter at least one quantity.', sendingNow: 'Sending…', savedOffline: (n) => `Saved on this device. ${n} record(s) will send when signal returns.`,
+    noGeo: 'This device cannot share its location; type it in.', geoDenied: 'Location was not shared; type latitude and longitude instead.',
+    needConn: 'Registering a site needs a connection.', checkVals: 'Check the latitude, longitude and number of people.',
+    regFail: 'The site could not be registered. Check the values and try again.', registered: (n) => `Registered ${n}. Start with a stock count.`,
+    stSent: 'sent', stWaiting: 'waiting', stRejected: 'refused', nothing: 'Nothing recorded on this device yet.', inUnit: 'in',
+  },
+  hi: {
+    title: 'स्टॉक जाँच', subtitle: 'बिना नेटवर्क भी चलता है · सिग्नल लौटने पर भेजता है', site: 'स्थान / चौकी',
+    showreg: '+ असली डेटा के लिए नया स्थान जोड़ें', rname: 'स्थान का नाम (जैसे हॉस्टल मेस, यूनिट कैंटीन)', lat: 'अक्षांश', lon: 'देशांतर',
+    locate: 'इस डिवाइस की लोकेशन लें', rhead: 'रोज़ कितने लोगों के लिए', register: 'स्थान दर्ज करें',
+    kind_count_btn: 'स्टॉक गिनती', kind_receipt_btn: 'प्राप्त', kind_issue_btn: 'जारी', op: 'आपका कॉलसाइन (वैकल्पिक)', save: 'रिकॉर्ड सहेजें',
+    drill: 'बिना सिग्नल का अभ्यास (ड्रिल)', logtitle: 'इस डिवाइस के रिकॉर्ड',
+    hint_count: 'अभी जो सामान वास्तव में मौजूद है, उसे गिनें।', hint_receipt: 'पिछली प्रविष्टि के बाद जो आया, वह दर्ज करें।', hint_issue: 'आज जो जारी या उपयोग हुआ, वह दर्ज करें।',
+    item_kerosene: 'केरोसिन / खाना पकाने का ईंधन', item_rations: 'राशन / भोजन', item_diesel: 'डीज़ल', item_ammunition: 'गोला-बारूद', item_medical: 'चिकित्सा सामग्री',
+    kind_count: 'गिनती', kind_receipt: 'प्राप्त', kind_issue: 'जारी',
+    online: 'ऑनलाइन', sending: (n) => `भेज रहे हैं ${n}`, offline: (n) => `ऑफ़लाइन · ${n} प्रतीक्षा में`,
+    groupLive: 'लाइव स्थान (असली डेटा)', groupDemo: 'डेमो चौकियाँ',
+    hintLive: (n) => `लाइव स्थान · ${n} लोग · यहाँ के रिकॉर्ड असली खपत से पूर्वानुमान सिखाते हैं।`,
+    hintDemo: 'डेमो चौकी · रिकॉर्ड डेमो दिवस पर दर्ज होते हैं और डैशबोर्ड तुरंत अपडेट होता है।',
+    sent: (n) => `${n} रिकॉर्ड भेजे गए।`, unreachable: 'सर्वर से संपर्क नहीं: रिकॉर्ड इसी डिवाइस पर रहेंगे और फिर भेजे जाएँगे।',
+    needKey: 'इस सर्वर के लिए एक्सेस कुंजी चाहिए। एडमिन से लिंक लें।', rejected: 'सर्वर ने ये रिकॉर्ड अस्वीकार किए (अज्ञात स्थान?)। ये इस डिवाइस पर चिह्नित हैं।',
+    enterOne: 'कम से कम एक मात्रा दर्ज करें।', sendingNow: 'भेज रहे हैं…', savedOffline: (n) => `इस डिवाइस पर सहेजा गया। सिग्नल लौटने पर ${n} रिकॉर्ड भेजे जाएँगे।`,
+    noGeo: 'यह डिवाइस लोकेशन नहीं दे सकता; हाथ से लिखें।', geoDenied: 'लोकेशन साझा नहीं हुई; अक्षांश और देशांतर लिखें।',
+    needConn: 'स्थान दर्ज करने के लिए कनेक्शन चाहिए।', checkVals: 'अक्षांश, देशांतर और लोगों की संख्या जाँचें।',
+    regFail: 'स्थान दर्ज नहीं हो सका। मान जाँचकर फिर कोशिश करें।', registered: (n) => `${n} दर्ज हुआ। स्टॉक गिनती से शुरू करें।`,
+    stSent: 'भेजा', stWaiting: 'प्रतीक्षा', stRejected: 'अस्वीकृत', nothing: 'इस डिवाइस पर अभी कोई रिकॉर्ड नहीं।', inUnit: 'में',
+  },
+}
+let lang = store.get('ic.lang', 'en')
+const t = (k, ...a) => { const v = TEXT[lang][k] ?? TEXT.en[k]; return typeof v === 'function' ? v(...a) : v }
+function applyLang() {
+  document.documentElement.lang = lang
+  document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n) })
+  $('lang').textContent = lang === 'en' ? 'हिं' : 'EN'
+  renderSites(); renderStatus()
 }
 const DEMO = ['ALPHA', 'BRAVO', 'CHARLIE', 'DELTA', 'ECHO', 'FOXTROT', 'GOLF', 'HOTEL'].map((id) => ({ id, name: 'Post ' + id[0] + id.slice(1).toLowerCase(), kind: 'demo' }))
 let sites = store.get('ic.sites', DEMO)
@@ -118,49 +167,71 @@ function renderSites() {
     const xs = sites.filter((s) => s.kind === k)
     return xs.length ? `<optgroup label="${label}">${xs.map((s) => `<option value="${esc(s.id)}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</optgroup>` : ''
   }
-  $('site').innerHTML = group('live', 'Live sites (real data)') + group('demo', 'Demo posts')
+  $('site').innerHTML = group('live', t('groupLive')) + group('demo', t('groupDemo'))
   renderRows()
 }
 
 function renderRows() {
   const s = site()
-  $('sitehint').textContent = s.kind === 'live'
-    ? `Live site · ${s.headcount} people · records here train the forecast on real usage.`
-    : 'Demo post · records are dated to the demo day and update the dashboard at once.'
-  $('kindhint').textContent = KIND[kind]
+  $('sitehint').textContent = s.kind === 'live' ? t('hintLive', s.headcount) : t('hintDemo')
+  $('kindhint').textContent = t('hint_' + kind)
   $('rows').innerHTML = Object.entries(ITEMS).filter(([, c]) => s.kind === 'demo' || !c.demoOnly).map(([k, c]) =>
-    `<div class="row"><div><b>${esc(c.label)}</b><small>${esc(c.unit)}</small></div><input inputmode="decimal" name="${esc(k)}" placeholder="—" aria-label="${esc(c.label)} in ${esc(c.unit)}" /></div>`).join('')
+    `<div class="row"><div><b>${esc(t('item_' + k))}</b><small>${esc(c.unit)}</small></div><input inputmode="decimal" name="${esc(k)}" placeholder="—" aria-label="${esc(t('item_' + k))} ${t('inUnit')} ${esc(c.unit)}" /></div>`).join('')
 }
 
 function renderStatus() {
   const q = store.get('ic.queue', [])
   $('net').className = 'pill ' + (online() ? 'on' : 'off')
-  $('net').textContent = online() ? (q.length ? `Sending ${q.length}` : 'Online') : `Offline · ${q.length} waiting`
+  $('net').textContent = online() ? (q.length ? t('sending', q.length) : t('online')) : t('offline', q.length)
   const log = store.get('ic.log', [])
   $('log').innerHTML = log.length ? log.slice(0, 10).map((r) =>
-    `<div><span>${esc(r.time.slice(5, 16).replace('T', ' '))} · ${esc(r.site)} · ${esc(r.kind)} ${esc(r.cls)} <b>${esc(r.quantity)}</b></span><span class="${r.synced ? 's' : 'q'}">${r.synced ? 'sent' : 'waiting'}</span></div>`).join('')
-    : '<div><span>Nothing recorded on this device yet.</span></div>'
+    `<div><span>${esc(r.time.slice(5, 16).replace('T', ' '))} · ${esc(r.site)} · ${esc(t('kind_' + r.kind))} ${esc(t('item_' + r.cls))} <b>${esc(r.quantity)}</b></span><span class="${r.rejected ? 'x' : r.synced ? 's' : 'q'}">${t(r.rejected ? 'stRejected' : r.synced ? 'stSent' : 'stWaiting')}</span></div>`).join('')
+    : `<div><span>${t('nothing')}</span></div>`
 }
 
+// Access key, only needed when the server sets FL_API_TOKEN: open this page once with ?key=<token>
+;(() => { const k = new URLSearchParams(location.search).get('key'); if (k) { store.set('ic.key', k); history.replaceState(null, '', location.pathname) } })()
+let syncing = false  // one upload at a time: the timer, the save button and the "online" event can all fire together
+
 async function sync() {
+  if (syncing) return
   const q = store.get('ic.queue', [])
   if (!q.length || !online()) return renderStatus()
   const op = $('op').value.trim().replace(/[^\w.-]/g, '')
+  const key = store.get('ic.key', null)
+  const send = (recs) => fetch('/api/inventory', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(op ? { 'x-operator': op } : {}), ...(key ? { authorization: `Bearer ${key}` } : {}) },
+    // uid travels as client_id: if the reply is lost and this batch is sent again, the server stores it once
+    body: JSON.stringify(recs.map(({ uid, site, cls, kind, quantity, time }) => ({ site_id: site, cls, kind, quantity, observed_at: time, source: 'field-app', client_id: uid }))),
+  })
+  const batch = q.slice(0, 200)  // the server takes up to 500 per call; a long outage can queue more
+  let more = false
+  syncing = true
   try {
-    const r = await fetch('/api/inventory', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...(op ? { 'x-operator': op } : {}) },
-      body: JSON.stringify(q.map(({ site, cls, kind, quantity, time }) => ({ site_id: site, cls, kind, quantity, observed_at: time, source: 'field-app' }))),
-    })
-    if (!r.ok) throw new Error(r.status)
-    const ids = new Set(q.map((x) => x.uid))
-    store.set('ic.queue', store.get('ic.queue', []).filter((x) => !ids.has(x.uid)))
-    store.set('ic.log', store.get('ic.log', []).map((x) => (ids.has(x.uid) ? { ...x, synced: true } : x)))
-    $('msg').textContent = `Sent ${q.length} record(s).`
+    const r = await send(batch)
+    if (r.status === 401) { $('msg').textContent = t('needKey'); syncing = false; return renderStatus() }
+    const sent = [], refused = []
+    if (r.ok) sent.push(...batch)
+    else if (r.status === 422) {  // one record the server will never accept (e.g. a deleted site) must not take the rest with it
+      for (const x of batch) {
+        const one = batch.length === 1 ? r : await send([x])
+        if (one.ok) sent.push(x)
+        else if (one.status === 422) refused.push(x)  // keep it visible, stop retrying it
+        else throw new Error(one.status)
+      }
+    } else throw new Error(r.status)
+    const ok = new Set(sent.map((x) => x.uid)), bad = new Set(refused.map((x) => x.uid))
+    store.set('ic.queue', store.get('ic.queue', []).filter((x) => !ok.has(x.uid) && !bad.has(x.uid)))
+    store.set('ic.log', store.get('ic.log', []).map((x) => (ok.has(x.uid) ? { ...x, synced: true } : bad.has(x.uid) ? { ...x, rejected: true } : x)))
+    $('msg').textContent = refused.length ? t('rejected') : t('sent', sent.length)
+    more = q.length > batch.length
   } catch {
-    $('msg').textContent = 'Server unreachable: records stay on this device and will retry.'
+    $('msg').textContent = t('unreachable')
   }
+  syncing = false
   renderStatus()
+  if (more) sync()
 }
 
 async function loadSites() {
@@ -186,32 +257,33 @@ $('form').addEventListener('submit', (e) => {
   const time = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 19) // device local time
   const items = [...new FormData(e.target)].filter(([k]) => ITEMS[k])
     .filter(([, v]) => v.trim() !== '' && Number.isFinite(Number(v)) && Number(v) >= 0)
-    .map(([cls, v]) => ({ uid: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()), site: s.id, cls, kind, quantity: Number(v), time }))
-  if (!items.length) { $('msg').textContent = 'Enter at least one quantity.'; return }
+    .map(([cls, v]) => ({ uid: crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`, site: s.id, cls, kind, quantity: Number(v), time }))
+  if (!items.length) { $('msg').textContent = t('enterOne'); return }
   store.set('ic.queue', [...store.get('ic.queue', []), ...items])
   store.set('ic.log', [...items, ...store.get('ic.log', [])].slice(0, 60))
   $('rows').querySelectorAll('input').forEach((i) => { i.value = '' })
-  $('msg').textContent = online() ? 'Sending…' : `Saved on this device. ${items.length} record(s) will send when signal returns.`
+  $('msg').textContent = online() ? t('sendingNow') : t('savedOffline', items.length)
   sync()
 })
 
 $('showreg').addEventListener('click', () => { $('reg').hidden = !$('reg').hidden })
 $('locate').addEventListener('click', () => {
-  if (!navigator.geolocation) { $('msg').textContent = 'This device cannot share its location; type it in.'; return }
+  if (!navigator.geolocation) { $('msg').textContent = t('noGeo'); return }
   navigator.geolocation.getCurrentPosition((p) => { $('rlat').value = p.coords.latitude.toFixed(5); $('rlon').value = p.coords.longitude.toFixed(5) },
-    () => { $('msg').textContent = 'Location was not shared; type latitude and longitude instead.' })
+    () => { $('msg').textContent = t('geoDenied') })
 })
 $('reg').addEventListener('submit', async (e) => {
   e.preventDefault()
-  if (!online()) { $('msg').textContent = 'Registering a site needs a connection.'; return }
+  if (!online()) { $('msg').textContent = t('needConn'); return }
   const body = { name: $('rname').value.trim(), lat: Number($('rlat').value), lon: Number($('rlon').value), headcount: Number($('rhead').value) }
-  if (![body.lat, body.lon, body.headcount].every(Number.isFinite)) { $('msg').textContent = 'Check the latitude, longitude and number of people.'; return }
-  const r = await fetch('/api/sites', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
-  if (!r.ok) { $('msg').textContent = 'The site could not be registered. Check the values and try again.'; return }
+  if (![body.lat, body.lon, body.headcount].every(Number.isFinite)) { $('msg').textContent = t('checkVals'); return }
+  const key = store.get('ic.key', null)
+  const r = await fetch('/api/sites', { method: 'POST', headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) }, body: JSON.stringify(body) }).catch(() => ({ ok: false }))
+  if (!r.ok) { $('msg').textContent = t('regFail'); return }
   const { id } = await r.json()
   store.set('ic.site', id)
   e.target.reset(); $('reg').hidden = true
-  $('msg').textContent = `Registered ${body.name}. Start with a stock count.`
+  $('msg').textContent = t('registered', body.name)
   loadSites()
 })
 $('site').addEventListener('change', (e) => { store.set('ic.site', e.target.value); renderRows() })
@@ -221,9 +293,9 @@ addEventListener('online', sync)
 addEventListener('offline', renderStatus)
 setInterval(sync, 15000)
 
+$('lang').addEventListener('click', () => { lang = lang === 'en' ? 'hi' : 'en'; store.set('ic.lang', lang); applyLang() })
 $('op').value = store.get('ic.op', '')
-renderSites()
-renderStatus()
+applyLang()
 loadSites()
 sync()
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/field/sw.js', { scope: '/field/' })

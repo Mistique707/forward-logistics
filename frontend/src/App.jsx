@@ -20,6 +20,15 @@ export default function App() {
   const [post, setPost] = useState(null)
   const [cls, setCls] = useState('kerosene')
   const [toast, setToast] = useState(null)
+  const [devices, setDevices] = useState([])
+
+  // IoT sensors: heartbeat status and last readings
+  useEffect(() => {
+    const load = () => api('devices').then(setDevices).catch(() => {})
+    load()
+    const id = setInterval(load, 10000)
+    return () => clearInterval(id)
+  }, [])
 
   useEffect(() => {
     Promise.all([api('network'), api('scenarios'), api('state?preset=baseline')]).then(([n, p, s]) => {
@@ -40,7 +49,9 @@ export default function App() {
         setBase(b)
         setState(Object.keys(scenario).length ? await api('state', scenario) : b)
         const e = r[0]
-        setToast(`Inventory check received: ${e.site_id} ${e.cls} ${e.kind} ${num(e.quantity)}. The picture is updated.`)
+        const from = e.source.startsWith('iot.') ? `Sensor ${e.source.slice(4).split(':')[0]}` : 'Inventory check'
+        setToast(`${from}: ${e.site_id} ${e.cls} ${e.kind} ${num(e.quantity)}. The picture is updated.`)
+        api('devices').then(setDevices).catch(() => {})
         setTimeout(() => setToast(null), 6000)
       }
       last = top
@@ -61,6 +72,12 @@ export default function App() {
   if (!state || !net) return <div className="empty" style={{ paddingTop: '40vh' }}>Building the supply picture…</div>
   const scenarioName = state.preset === 'baseline' ? null : presets.find((p) => p.id === state.preset)?.name || 'Custom scenario'
   const openPost = (id, c) => { setPost(id); if (c) setCls(c); setView('overview') }
+  const checked = async (id) => {  // a discrepancy has been verified on the ground
+    await api(`anomalies/${id}/checked`, undefined, 'POST').catch(() => null)
+    const b = await api('state?preset=baseline')
+    setBase(b)
+    setState(Object.keys(scenario).length ? await api('state', scenario) : b)
+  }
 
   return (
     <div className="shell">
@@ -71,7 +88,7 @@ export default function App() {
           <div><h1>Forward Logistics</h1><p>Ladakh sector · winter supply picture</p></div>
         </div>
         {scenarioName && <span className="chip">What-if: {scenarioName}<button onClick={() => run({})}>Back to today</button></span>}
-        <div className="date"><b>{dayLabel(state.demo_date, 0)} 2025</b><span>simulated date · synthetic post data on real terrain and weather</span></div>
+        <div className="date"><b>{dayLabel(state.demo_date, 0)} {state.demo_date.slice(0, 4)}</b><span>simulated date · synthetic post data on real terrain and weather</span></div>
         <a className="linkbtn" href="/field/" target="_blank" rel="noreferrer">Open inventory check ↗</a>
       </header>
       <nav className="nav" aria-label="Views">
@@ -80,7 +97,7 @@ export default function App() {
       <Kpis state={state} base={scenarioName ? base : null} />
       <main className="view">
         {view === 'overview' && <Overview state={state} net={net} scenario={scenario} post={post} cls={cls} onPost={setPost} onCls={setCls}
-          busy={busy} scenarioName={scenarioName} />}
+          busy={busy} scenarioName={scenarioName} devices={devices} onChecked={checked} />}
         {view === 'plan' && <PlanView state={state} net={net} onPost={openPost} />}
         {view === 'whatif' && <WhatIf presets={presets} state={state} base={base} busy={busy} onRun={run} net={net} />}
         {view === 'learning' && <Learning onChange={() => run(scenario)} />}
@@ -108,7 +125,7 @@ function Kpis({ state, base }) {
     <section className="kpis" aria-label="Summary">
       <div className={`kpi ${k.posts_at_risk ? 'bad' : ''}`}>
         <div className="k">Posts that need action</div>
-        <div className="v">{k.posts_at_risk}<small>of 8</small><Delta v={k.posts_at_risk} b={b.posts_at_risk} /></div>
+        <div className="v">{k.posts_at_risk}<small>of {state.posts.length}</small><Delta v={k.posts_at_risk} b={b.posts_at_risk} /></div>
         <div className="s">{k.earliest_runout !== null ? `first runout in ${k.earliest_runout} days without action` : 'no runout in sight'}</div>
       </div>
       <div className={`kpi ${zo.close_day !== null && zo.close_day < 14 ? 'warn' : ''}`}>

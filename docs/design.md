@@ -17,6 +17,17 @@ class, can we still reach it in time, and what should we send, by which route an
 | The model trains itself from inventory records | Learning loop (section 5): usage is derived from records, the per-site factor updates instantly, and the shared model retrains champion/challenger, judged on data it has never seen. |
 | The UI is cluttered | Light theme, five focused views and plain-language summaries (section 8). |
 
+## Revision 3: hardening for the SIH demo
+
+| Gap | What was built |
+|---|---|
+| The PS names IoT-based inventory tracking | Seven simulated sensors (tank-level, load cell) on five posts, a signed telemetry endpoint, report-by-exception heartbeats, sensor status in the post panel (section 8). |
+| Defence data needs integrity and access control | HMAC-signed, replay-proof sensor messages; optional bearer token on every write; idempotent uploads; callsign audit trail. |
+| Pilferage and leaks go unnoticed until a post runs short | Book-vs-physical check on every count, raised as a *Check store* alert. |
+| Retried field-app uploads were double-counted; records made before 06:00 or after midnight were ignored; a second live site with a similar name overwrote the first; a post already out of stock got "no feasible lift" | All fixed, each with a test. |
+| Plans had to be copied by hand | Movement orders as CSV from the dispatch plan. |
+| Field staff may prefer Hindi; the dashboard broke on tablets | Hindi / English toggle in the field app; one-column layout under 900 px. |
+
 ---
 
 ## 1. Theatre and data model
@@ -199,7 +210,7 @@ Light theme in IBM Plex, with status shown as a pill (colour + word) and five vi
 `py -3.13 demo.py` sets up, rebuilds the history, trains, benchmarks, evaluates the local layer, builds the UI and
 serves on :8000.
 
-`pytest` (15 checks) covers:
+`pytest` (22 checks) covers:
 - drivers and the published ration scale
 - the closure rule's error against the real record
 - the combined model beating both naive rules and its parents
@@ -212,6 +223,11 @@ serves on :8000.
 - pass closure changing the plan
 - grounding delaying the air lift
 - late reopening and a surge raising demand
+- a retried upload stored once, demo records applied in arrival order
+- a count far below the books raising a discrepancy, and closing it
+- sensor telemetry: forged signature refused, deadband heartbeat, replay dropped, a real change stored
+- live-site ids never colliding
+- a stock-out getting an emergency lift, and a late lift when nothing lands in time
 
 ## Simplifications
 

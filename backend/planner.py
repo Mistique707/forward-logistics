@@ -15,6 +15,9 @@ from .config import CLASSES, MODES, PLAN_DAYS, heli_derate
 
 H = PLAN_DAYS * 24
 URGENT_PENALTY = 10 ** 9
+EMERGENCY_H = 24  # stock-outs: anything that can land within a day
+LATE_PENALTY = URGENT_PENALTY // 4  # serving a load after its runout beats not serving it, but only just
+LATE_PER_HOUR = 5000  # ...and the earlier the better (a day late costs more than a spare sortie)
 MAX_NODES = 300
 TIME_LIMIT_S = 5  # hard cap for the whole plan, split across the strategies
 STRATEGIES = (routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION,
@@ -66,10 +69,8 @@ def plan(demands, ctx):
     for c in chunks:
         if c["kind"] == "urgent" and by_id[c["post"]]["access"] == "track":
             urgent_mule_kg[c["post"]] = urgent_mule_kg.get(c["post"], 0) + c["kg"]
-    for ci, c in enumerate(chunks):
+    def options(c, deadline):
         post = by_id[c["post"]]
-        # urgent loads must land a day before the runout day; stocking loads anywhere in the window
-        deadline = H if c["kind"] == "stocking" or c["runout_day"] is None else min(H, max(0, c["runout_day"] - 1) * 24)
         opts = []
         # truck (+ mule last leg)
         road = network.pair("SAPPHIRE", c["post"])
@@ -101,6 +102,17 @@ def plan(demands, ctx):
             factor = heli_derate(post["alt_m"]) if mode == "heli" else 1 - m["loss"]
             opts.append({"mode": mode, "lo": 0, "hi": int(deadline), "forbid": forbid,
                          "load": math.ceil(c["kg"] / factor)})
+        return opts
+
+    for ci, c in enumerate(chunks):
+        # urgent loads must land a day before the runout day; stocking loads anywhere in the window. A post that is
+        # already out, or runs out tomorrow, gets the fastest lift that can land within EMERGENCY_H.
+        deadline = H if c["kind"] == "stocking" or c["runout_day"] is None else min(
+            H, max(EMERGENCY_H, (c["runout_day"] - 1) * 24))
+        opts = options(c, deadline)
+        if not opts and c["kind"] == "urgent" and deadline < H:
+            # nothing lands in time: still plan the earliest lift that can, and flag it as late
+            opts = [{**o, "late": True} for o in options(c, H)]
         idx = []
         for o in opts:
             idx.append(len(nodes))
@@ -144,13 +156,14 @@ def _solve(nodes, vehicles, chunks, disj, strategy):
     service = {"truck": 1, "heli": 0.5, "airdrop": 0.25}
     mule_cost = [MODES["mule"]["per_kg"] * n["load"] if i > 2 and by_id[n["post"]]["access"] == "track" else 0
                  for i, n in enumerate(nodes)]
+    late_cost = [LATE_PENALTY if n.get("late") else 0 for n in nodes]
     cost_cb, time_cb = {}, {}
     for mode in ("truck", "heli", "airdrop"):
         m, d = MODES[mode], road if mode == "truck" else air
         dist = [[0.0 if "END" in (a["post"], b["post"]) else d[(a["post"], b["post"])] for b in nodes] for a in nodes]
         start = 1 if mode == "heli" else 0
         # the fixed sortie cost sits on the first leg so insertion heuristics see it too
-        cost = [[int(x * m["per_km"] + (mule_cost[j] if mode == "truck" else 0)
+        cost = [[int(x * m["per_km"] + (mule_cost[j] if mode == "truck" else 0) + late_cost[j]
                      + (m["fixed"] if i == start and j > 2 else 0)) for j, x in enumerate(row)]
                 for i, row in enumerate(dist)]
         tt = [[math.ceil(_hours(x, mode) + (service[mode] if i > 2 else 0)) for x in row] for i, row in enumerate(dist)]
@@ -173,6 +186,8 @@ def _solve(nodes, vehicles, chunks, disj, strategy):
             if a < b:
                 tdim.CumulVar(ix).RemoveInterval(a, b - 1)
         routing.VehicleVar(ix).SetValues([-1] + [v for v, veh in enumerate(vehicles) if veh["mode"] == n["mode"]])
+        if n.get("late"):
+            tdim.SetCumulVarSoftUpperBound(ix, 0, LATE_PER_HOUR)
     for ci, idx in enumerate(disj):
         c = chunks[ci]
         if c["kind"] == "urgent":
@@ -214,8 +229,11 @@ def _extract(sol, routing, mgr, tdim, nodes, vehicles, chunks, disj):
             if n["post"] not in stops:
                 order.append(n["post"])
                 stops[n["post"]] = {"post": n["post"], "arrive_h": sol.Min(tdim.CumulVar(ix)), "items": {}, "kg": 0.0,
-                                    "mule": veh["mode"] == "truck" and by_id[n["post"]]["access"] == "track"}
+                                    "mule": veh["mode"] == "truck" and by_id[n["post"]]["access"] == "track",
+                                    "late": []}
             s = stops[n["post"]]
+            if n.get("late") and c["cls"] not in s["late"]:
+                s["late"].append(c["cls"])
             s["items"][c["cls"]] = s["items"].get(c["cls"], 0) + c["kg"] / CLASSES[c["cls"]]["kg"]
             s["kg"] += c["kg"]
             ix = sol.Value(routing.NextVar(ix))

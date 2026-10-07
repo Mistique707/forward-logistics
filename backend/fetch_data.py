@@ -32,13 +32,13 @@ OVERPASS = [
 UA = {"User-Agent": "forward-logistics/0.1 (SIH prototype)"}
 
 
-def _get(url, data=None, timeout=180):
-    for attempt in range(6):
+def _get(url, data=None, timeout=180, retries=6):
+    for attempt in range(retries):
         try:
             with urllib.request.urlopen(urllib.request.Request(url, data=data, headers=UA), timeout=timeout) as r:
                 return r.read()
         except urllib.error.HTTPError as ex:
-            if ex.code != 429 or attempt == 5:
+            if ex.code != 429 or attempt == retries - 1:
                 raise
             time.sleep(65)  # Open-Meteo's free tier limits requests per minute
 
@@ -101,14 +101,14 @@ def fetch_ppac():
     print(f"ppac: {len(rows)} rows")
 
 
-def elevation(points):
+def elevation(points, timeout=180, retries=6):
     """Elevations (m) for [(lat, lon), ...], 100 per request."""
     out = []
     for i in range(0, len(points), 100):
         chunk = points[i:i + 100]
         url = ("https://api.open-meteo.com/v1/elevation?latitude=" + ",".join(f"{a:.5f}" for a, _ in chunk)
                + "&longitude=" + ",".join(f"{b:.5f}" for _, b in chunk))
-        out += json.loads(_get(url))["elevation"]
+        out += json.loads(_get(url, timeout=timeout, retries=retries))["elevation"]
         time.sleep(0.5)
     return out
 

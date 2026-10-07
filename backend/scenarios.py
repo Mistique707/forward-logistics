@@ -238,7 +238,11 @@ def _alerts(state):
                 continue
             r = c["runout_day"]
             lab = CLASSES[cls]["label"].lower()
-            if r is not None:
+            if r == 0:
+                when = f"is out of {lab} now"
+            elif r == 1:
+                when = f"runs out of {lab} tomorrow"
+            elif r is not None:
                 when = f"runs out of {lab} in {r} days"
             elif c["runout_p90"] is not None:
                 r = c["runout_p90"]
@@ -246,8 +250,16 @@ def _alerts(state):
             else:
                 continue
             carry = [t for t in trips if any(s["post"] == p and cls in s["items"] for s in t["stops"])]
+            late = [(t, s) for t in carry for s in t["stops"] if s["post"] == p and cls in s.get("late", ())]
             if (p, cls) in unmet:
                 action, sev = "NO feasible lift before runout: escalate for additional airlift", "critical"
+            elif late:
+                t, s = min(late, key=lambda ts: ts[1]["arrive_h"])
+                land = s["arrive_h"] // 24 + (planner._mule_days(s["kg"]) if s["mule"] else 0)
+                mode = {"truck": "truck", "heli": "helicopter", "airdrop": "airdrop"}[t["mode"]]
+                action = (f"nothing lands before it runs out; earliest is a {mode} landing {day_label(land)}: "
+                          f"escalate, and ration {lab} until then")
+                sev = "critical"
             else:
                 modes = {t["mode"] for t in carry}
                 trucks = [t for t in carry if t["mode"] == "truck"]
@@ -264,7 +276,7 @@ def _alerts(state):
                     action = "no lift planned for it"
                 # the road window shutting before the runout is the winter-stocking danger
                 sev = "critical" if r is not None and (r <= 3 or (cd is not None and cd < r)) else "high"
-            alerts.append({"severity": sev, "post": p, "cls": cls, "days": r,
+            alerts.append({"severity": sev, "kind": "runout", "post": p, "cls": cls, "days": r,
                            "title": f"{post['name']} {when}", "context": pass_txt, "action": action,
                            "text": f"{post['name']} {when}; {pass_txt}; {action}."})
         backlog = [(cls, c) for cls, c in post["classes"].items() if c["shortfall"] - c["urgent"] > 0
@@ -282,18 +294,37 @@ def _alerts(state):
                 action = (f"covered by {len(tr)} truck{'s' * (len(tr) != 1)}"
                           + (f", dispatch by {day_label(by // 24)}" if by is not None else ""))
                 sev = "warning"
-            alerts.append({"severity": sev, "post": p, "cls": None, "days": post["worst_days"],
+            alerts.append({"severity": sev, "kind": "stocking", "post": p, "cls": None, "days": post["worst_days"],
                            "title": f"{post['name']}: {kg / 1000:.1f} t short of winter target",
                            "context": f"{names}; {pass_txt}", "action": action,
                            "text": f"{post['name']} is {kg / 1000:.1f} t short of its winter target ({names}); "
                                    f"{pass_txt}; {action}."})
+    names = {p["id"]: p["name"] for p in state["posts"]}
+    for a in open_anomalies():
+        if a["site_id"] not in names:
+            continue
+        unit, lab = CLASSES[a["cls"]]["unit"], CLASSES[a["cls"]]["label"].lower()
+        gap = a["book"] - a["observed"]
+        who = "Sensor " + a["source"].split(".", 1)[1].split(":")[0] if a["source"].startswith("iot.") else "Physical count"
+        alerts.append({"severity": "high", "kind": "anomaly", "id": a["id"], "post": a["site_id"], "cls": a["cls"],
+                       "days": None, "title": f"{names[a['site_id']]} {lab}: {gap / a['book'] * 100:.0f}% below book stock",
+                       "context": f"{who} reads {a['observed']:,.0f} {unit}; the books say {a['book']:,.0f} {unit}",
+                       "action": "verify the store: leak, pilferage or an unrecorded issue",
+                       "text": f"{names[a['site_id']]} {lab} is {gap:,.0f} {unit} below book stock; verify the store."})
     alerts.sort(key=lambda a: (SEVERITY[a["severity"]], a["days"] if a["days"] is not None else 999))
     return alerts
 
 
+def open_anomalies():
+    """Book-vs-physical discrepancies not yet checked (written by inventory.ingest)."""
+    with sqlite3.connect(DB_PATH) as con:
+        con.row_factory = sqlite3.Row
+        return [dict(r) for r in con.execute("SELECT * FROM anomalies WHERE status = 'open' ORDER BY id")]
+
+
 def _kpis(state):
     t = state["plan"]["totals"]
-    urgent_posts = {a["post"] for a in state["alerts"] if a["cls"]}
+    urgent_posts = {a["post"] for a in state["alerts"] if a["kind"] == "runout"}
     runouts = [c["runout_day"] for p in state["posts"] for c in p["classes"].values() if c["runout_day"] is not None]
     bm = t["by_mode"]
     return {"posts_at_risk": len(urgent_posts), "zojila_close_day": state["passes"][0]["close_day"],
